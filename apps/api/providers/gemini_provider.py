@@ -2,77 +2,110 @@ import os
 import json
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field
-from core.providers import AIProvider
 import google.generativeai as genai
 
-class AIReasoningOutput(BaseModel):
-    is_qualified: bool = Field(description="Whether the business is qualified as a lead based on evidence.")
-    business_fit_score: int = Field(description="Score 0-100 for business fit.")
-    digital_gap_score: int = Field(description="Score 0-100 for digital gap (higher means bigger gap/problem).")
-    offer_fit_score: int = Field(description="Score 0-100 for Devacia offer fit.")
-    buying_intent_score: int = Field(description="Score 0-100 for buying intent/signals.")
-    contactability_score: int = Field(description="Score 0-100 for contactability.")
-    primary_problem: str = Field(description="The primary digital problem identified from evidence.")
-    recommended_offer: str = Field(description="The recommended Devacia offer (e.g. Lead Capture, Quote Funnel).")
-    outreach_angle: str = Field(description="A human-readable SDR outreach angle based ONLY on observed problems.")
-    reasoning: str = Field(description="Detailed reasoning citing specific evidence.")
 
-class GeminiProvider(AIProvider):
+class AISDROutput(BaseModel):
+    """Full structured output from the Gemini AI SDR Analyst."""
+    # Lead qualification
+    is_qualified: bool = Field(description="Whether this business is worth pursuing for Devacia")
+    lead_summary: str = Field(description="1-2 sentence human-readable summary of the lead")
+    why_this_is_a_good_lead: str = Field(description="Specific reasons this is a good lead, citing observed evidence")
+
+    # Scoring components (0-20 each)
+    business_fit_score: int = Field(description="Score 0-20: Is this the type of business Devacia serves?")
+    website_gap_score: int = Field(description="Score 0-20: How significant are their website problems?")
+    ux_ui_gap_score: int = Field(description="Score 0-15: How poor is the UX/UI?")
+    conversion_gap_score: int = Field(description="Score 0-20: How weak is their conversion setup?")
+    offer_fit_score: int = Field(description="Score 0-15: How well does a Devacia offer match their needs?")
+    contactability_score: int = Field(description="Score 0-10: How likely can we reach them?")
+
+    # Problems
+    detected_problems: List[str] = Field(description="List of specific digital/UX/conversion problems detected, each grounded in evidence")
+    primary_problem: str = Field(description="The single most impactful problem Devacia can solve")
+
+    # Opportunity
+    recommended_offer: str = Field(description="The exact Devacia service to pitch, e.g. 'Clinic Booking System', 'Restaurant Reservation System'")
+    estimated_offer_range: str = Field(description="Estimated project value, e.g. '$3,500 - $5,000'")
+
+    # Outreach
+    outreach_angle: str = Field(description="A specific, personalized outreach sentence referencing the actual observed problem")
+    personalization_points: List[str] = Field(description="2-4 specific facts about this business to use in outreach (from evidence only)")
+
+    # Confidence
+    confidence: str = Field(description="high / medium / low — how confident is the analysis given the evidence")
+    reasoning: str = Field(description="Detailed reasoning chain citing specific pieces of evidence")
+
+
+SYSTEM_PROMPT = """You are an elite AI Sales Development Representative (SDR) Analyst working for Devacia, a web development agency that builds booking systems, lead capture funnels, restaurant platforms, clinic management systems, and conversion-focused websites.
+
+Your job is to analyze collected intelligence about a business and produce a structured SDR dossier.
+
+CRITICAL RULES:
+1. NEVER invent information. Every claim must be grounded in the provided evidence.
+2. If evidence is thin, acknowledge it. Confidence should be "low" if little was collected.
+3. Problems must be SPECIFIC: NOT "poor CTA" but "Contact Us button is positioned below the fold on mobile with no sticky CTA visible"
+4. Recommended offer must map to what Devacia ACTUALLY builds — booking systems, lead capture, restaurant sites, clinic systems, ecommerce, redesigns.
+5. Outreach angle must be something the prospect would think: "How did they know that?" — not generic.
+6. Focus on the GAP: what the business is MISSING that costs them customers/revenue.
+"""
+
+
+class GeminiProvider:
     def __init__(self):
-        # Configure Gemini API key from environment variable
         api_key = os.environ.get("GEMINI_API_KEY")
         if api_key:
             genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-pro') # Or the specified model
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     async def analyze(self, evidence: List[Dict[str, Any]], industry_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze evidence and generate diagnosis using Gemini."""
-        
-        prompt = f"""
-        You are an expert SDR (Sales Development Representative) Analyst.
-        Your task is to analyze a business based on collected evidence and qualify them for a Devacia agency offer.
-        
-        Industry Configuration:
-        {json.dumps(industry_config, indent=2)}
-        
-        Collected Evidence:
-        {json.dumps(evidence, indent=2)}
-        
-        RULES:
-        1. Reason ONLY from the collected evidence provided. Do not invent missing facts.
-        2. If the website does not exist or has critical issues that prevent analysis, score it low.
-        3. Match the diagnosis to the closest offer specified in the Industry Configuration.
-        4. Produce a human-readable outreach angle based on the OBSERVED problem, not generic personalization.
-        
-        Provide your analysis in JSON format matching the schema.
-        """
-        
+        """Full AI SDR analysis using Gemini with structured JSON output."""
+
+        evidence_text = "\n".join([
+            f"- [{e.get('source_type', 'unknown')}] {e.get('evidence_text', '')}"
+            for e in evidence
+        ])
+
+        prompt = f"""{SYSTEM_PROMPT}
+
+Industry Configuration:
+{json.dumps(industry_config, indent=2)}
+
+Collected Evidence:
+{evidence_text}
+
+Analyze this business and return a complete AI SDR dossier in JSON format.
+"""
+
         try:
-            # Using generate_content with JSON mode/schema enforcement if available
             response = self.model.generate_content(
                 prompt,
                 generation_config=genai.GenerationConfig(
                     response_mime_type="application/json",
-                    response_schema=AIReasoningOutput,
+                    response_schema=AISDROutput,
                 )
             )
-            
-            # Parse the JSON response
             result_json = json.loads(response.text)
             return result_json
-            
+
         except Exception as e:
             print(f"Gemini API error: {e}")
-            # Fallback/error response
             return {
                 "is_qualified": False,
+                "lead_summary": "Analysis failed",
+                "why_this_is_a_good_lead": "N/A",
                 "business_fit_score": 0,
-                "digital_gap_score": 0,
+                "website_gap_score": 0,
+                "ux_ui_gap_score": 0,
+                "conversion_gap_score": 0,
                 "offer_fit_score": 0,
-                "buying_intent_score": 0,
                 "contactability_score": 0,
-                "primary_problem": "Failed to analyze",
+                "detected_problems": ["Failed to analyze — Gemini API error"],
+                "primary_problem": f"Error: {str(e)}",
                 "recommended_offer": "None",
-                "outreach_angle": "None",
-                "reasoning": f"Error calling Gemini: {e}"
+                "estimated_offer_range": "N/A",
+                "outreach_angle": "N/A",
+                "personalization_points": [],
+                "confidence": "low",
+                "reasoning": f"Gemini error: {e}"
             }

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from worker import process_campaign_task
 from core.database import get_db, engine
 from core.database import Base
-from core.models import Campaign, Business, Opportunity, Score, Contact, Evidence
+from core.models import *
 import os
 
 app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")

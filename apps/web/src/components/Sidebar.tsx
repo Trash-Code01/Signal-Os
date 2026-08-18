@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FiLayout, FiTarget, FiUsers, FiBriefcase, FiSearch, FiDownload, FiSettings, FiArchive } from 'react-icons/fi';
+import { FiLayout, FiTarget, FiUsers, FiBriefcase, FiSearch, FiDownload, FiSettings, FiArchive, FiActivity, FiPlus } from 'react-icons/fi';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -34,6 +34,14 @@ export function Sidebar() {
         <Link href="/leads" className={getLinkClass('/leads')}>
           <FiUsers className="w-4 h-4 opacity-70" />
           Leads
+        </Link>
+        <Link href="/jobs" className={getLinkClass('/jobs')}>
+          <FiActivity className="w-4 h-4 opacity-70" />
+          Job Monitor
+        </Link>
+        <Link href="/campaigns/new" className={getLinkClass('/campaigns/new')}>
+          <FiPlus className="w-4 h-4 opacity-70" />
+          New Campaign
         </Link>
         <Link href="#" className={getLinkClass('/opportunities')}>
           <FiBriefcase className="w-4 h-4 opacity-70" />

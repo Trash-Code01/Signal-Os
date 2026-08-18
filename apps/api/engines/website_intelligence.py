@@ -73,8 +73,8 @@ class WebsiteIntelligenceEngine:
                             
                         # 3. Simple text capture for AI reasoning later
                         page_text = await page.evaluate("document.body.innerText")
-                        # Truncate text to avoid blowing up tokens
                         page_text = page_text[:5000] if page_text else ""
+                        findings["text_content"] = page_text
                         
                         findings["evidence"].append({
                             "source_type": "playwright_crawler",
@@ -82,12 +82,32 @@ class WebsiteIntelligenceEngine:
                             "confidence": 1.0,
                             "page_url": url
                         })
+
+                        # Extract Emails & Phones
+                        import re
+                        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+                        phone_pattern = r'(\+\d{1,2}\s?)?1?\-?\.?\s?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}'
+                        findings["emails"] = list(set(re.findall(email_pattern, page_text)))
+                        findings["phones"] = list(set(re.findall(phone_pattern, page_text)))
                         
-                        # 4. Take Screenshots
+                        # Detect Tech/Booking keywords in HTML
+                        html = await page.content()
+                        html_lower = html.lower()
+                        tech_stack = []
+                        if "wordpress" in html_lower or "wp-content" in html_lower: tech_stack.append("WordPress")
+                        if "shopify" in html_lower: tech_stack.append("Shopify")
+                        if "woocommerce" in html_lower: tech_stack.append("WooCommerce")
+                        if "calendly" in html_lower or "acuity" in html_lower or "fresha" in html_lower: tech_stack.append("Booking Software")
+                        findings["technology_stack"] = tech_stack
+                        
+                        # 4. Take Screenshots (Disk + Base64)
                         screenshot_dir = os.path.join(os.getcwd(), "screenshots")
                         os.makedirs(screenshot_dir, exist_ok=True)
                         desktop_path = os.path.join(screenshot_dir, f"{url.replace('https://', '').replace('/', '_')}_desktop.png")
-                        await page.screenshot(path=desktop_path)
+                        screenshot_bytes = await page.screenshot(path=desktop_path, type="jpeg", quality=60)
+                        
+                        import base64
+                        findings["desktop_screenshot_base64"] = base64.b64encode(screenshot_bytes).decode('utf-8')
                         
                         # 5. Call Google PageSpeed Insights (if API key available)
                         ps_api_key = os.environ.get("PAGESPEED_API_KEY")
