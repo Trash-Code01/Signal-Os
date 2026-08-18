@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # 1. Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: devacia_prod_postgres
+    environment:
+      POSTGRES_USER: devacia
+      POSTGRES_PASSWORD: devacia_password
+      POSTGRES_DB: devacia_os
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    restart: always
+    networks:
+      - devacia_network
+
+  # 2. Message Queue
+  redis:
+    image: redis:7-alpine
+    container_name: devacia_prod_redis
+    volumes:
+      - redis_prod_data:/data
+    restart: always
+    networks:
+      - devacia_network
+
+  # 3. FastAPI Backend
+  api:
+    build: 
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: devacia_prod_api
+    env_file:
+      - ./apps/api/.env
+    environment:
+      - DATABASE_URL=postgresql+psycopg://devacia:devacia_password@postgres:5432/devacia_os
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+    networks:
+      - devacia_network
+
+  # 4. Celery Worker (Crawling/Enrichment)
+  worker:
+    build: 
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: devacia_prod_worker
+    env_file:
+      - ./apps/api/.env
+    environment:
+      - DATABASE_URL=postgresql+psycopg://devacia:devacia_password@postgres:5432/devacia_os
+      - REDIS_URL=redis://redis:6379/0
+    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "-P", "threads"]
+    depends_on:
+      - postgres
+      - redis
+      - api
+    restart: always
+    networks:
+      - devacia_network
+
+  # 5. Next.js Frontend
+  web:
+    build: 
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: devacia_prod_web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    restart: always
+    networks:
+      - devacia_network
+
+volumes:
+  postgres_prod_data:
+  redis_prod_data:
+
+networks:
+  devacia_network:
+    driver: bridge
