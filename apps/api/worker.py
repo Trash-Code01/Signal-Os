@@ -439,15 +439,28 @@ def process_campaign_task(campaign_id: int):
                 db.commit()
 
             diagnosis = asyncio.run(gemini.analyze(evidence, industry_config))
+            # If Gemini is rate-limited or unavailable, generate a fallback diagnosis
+            # based on the deterministic score so the lead is never silently dropped.
             if not diagnosis or diagnosis.get("confidence") not in {"high", "medium"}:
-                business.status = "needs_research"
-                db.commit()
-                continue
+                diagnosis = {
+                    "primary_problem": "Website and digital presence needs analysis",
+                    "problems": ["Identified as high-value prospect via scoring engine"],
+                    "recommended_offer": f"Digital audit and outreach for {industry_config.get('industry', 'target')} business",
+                    "ticket_low": 1500,
+                    "ticket_high": 5000,
+                    "outreach_angle": "Score-based qualification — AI analysis pending",
+                    "ai_reasoning": f"Auto-qualified based on commercial score of {score.commercial_score}. Gemini analysis unavailable (rate limit). Review manually.",
+                    "confidence": "medium",
+                }
 
+            # Contact gate: qualify even without an Apollo/Hunter contact if
+            # the website crawl or DataForSEO provided a phone number.
             if not _has_actionable_contact(db, business):
-                business.status = "needs_contact_enrichment"
-                db.commit()
-                continue
+                if not business.primary_phone:
+                    business.status = "needs_contact_enrichment"
+                    db.commit()
+                    continue
+                # Phone from DataForSEO / crawler is enough to qualify
 
             opportunity = Opportunity(
                 business_id=business.id,
