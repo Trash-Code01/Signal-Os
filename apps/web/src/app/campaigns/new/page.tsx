@@ -58,7 +58,7 @@ export default function NewCampaignPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        router.push(`/jobs?campaign=${data.id}`);
+        router.push(`/jobs?campaign=${data.campaign_id}`);
       }
     } catch (e) {
       console.error(e);

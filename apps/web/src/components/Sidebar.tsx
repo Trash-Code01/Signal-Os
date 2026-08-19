@@ -27,10 +27,7 @@ export function Sidebar() {
           <FiLayout className="w-4 h-4 opacity-70" />
           Overview
         </Link>
-        <Link href="/campaigns" className={getLinkClass('/campaigns')}>
-          <FiTarget className="w-4 h-4 opacity-70" />
-          Campaigns
-        </Link>
+
         <Link href="/leads" className={getLinkClass('/leads')}>
           <FiUsers className="w-4 h-4 opacity-70" />
           Leads

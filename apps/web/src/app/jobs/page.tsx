@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 type StageStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -44,46 +44,54 @@ function ProgressBar({ count = 0, total = 100 }: { count?: number; total?: numbe
   );
 }
 
-export default function JobsPage() {
+function JobsContent() {
   const searchParams = useSearchParams();
   const campaignId = searchParams.get('campaign');
   const [stages, setStages] = useState<Stage[]>(PIPELINE_STAGES);
-  const [campaign, setCampaign] = useState<any>(null);
   const [stats, setStats] = useState({ discovered: 0, qualified: 0, enriched: 0, elapsed: 0 });
 
-  // Simulate pipeline stages progressing for MVP (replace with real SSE/polling later)
   useEffect(() => {
     if (!campaignId) return;
 
-    const stageDelays = [1500, 1000, 1000, 2000, 2000, 1500, 2000, 1500, 2500, 1000];
-    let elapsed = 0;
-
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    stageDelays.forEach((delay, i) => {
-      elapsed += delay;
-      // Mark as running
-      timers.push(setTimeout(() => {
-        setStages(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'running', count: 0, total: 100 } : s));
-      }, elapsed - delay / 2));
-
-      // Mark as done
-      timers.push(setTimeout(() => {
-        setStages(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'done', count: 100, total: 100 } : s));
-        if (i === 0) setStats(s => ({ ...s, discovered: 24 }));
-        if (i === 5) setStats(s => ({ ...s, qualified: 18 }));
-        if (i === 7) setStats(s => ({ ...s, enriched: 14 }));
-      }, elapsed));
-    });
-
+    let ticker: ReturnType<typeof setInterval>;
+    let poller: ReturnType<typeof setInterval>;
+    
     // Tick elapsed time
-    const ticker = setInterval(() => setStats(s => ({ ...s, elapsed: s.elapsed + 1 })), 1000);
-    timers.push(ticker as any);
+    ticker = setInterval(() => setStats(s => ({ ...s, elapsed: s.elapsed + 1 })), 1000);
 
-    return () => timers.forEach(clearTimeout);
+    // Poll API
+    const fetchStatus = async () => {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${apiUrl}/api/campaigns/${campaignId}/status`);
+        if (res.ok) {
+          const data = await res.json();
+          setStages(data.stages);
+          setStats(s => ({ 
+            ...s, 
+            discovered: data.stats.discovered, 
+            qualified: data.stats.qualified, 
+            enriched: data.stats.enriched 
+          }));
+          if (data.status === 'completed') {
+            clearInterval(poller);
+            clearInterval(ticker);
+          }
+        }
+      } catch (e) {
+        console.error("Polling error", e);
+      }
+    };
+
+    fetchStatus(); // initial call
+    poller = setInterval(fetchStatus, 3000); // poll every 3s
+
+    return () => {
+      clearInterval(ticker);
+      clearInterval(poller);
+    };
   }, [campaignId]);
 
-  const runningStage = stages.find(s => s.status === 'running');
   const doneCount = stages.filter(s => s.status === 'done').length;
   const overallPct = Math.round((doneCount / stages.length) * 100);
   const elapsed = `${Math.floor(stats.elapsed / 60)}m ${stats.elapsed % 60}s`;
@@ -140,7 +148,7 @@ export default function JobsPage() {
           <h2 className="text-white font-semibold">Pipeline Stages</h2>
         </div>
         <div className="divide-y divide-zinc-800/40">
-          {stages.map((stage, i) => (
+          {stages.map((stage) => (
             <div key={stage.key} className={`px-6 py-4 transition-colors ${stage.status === 'running' ? 'bg-[#8b5cf6]/5' : ''}`}>
               <div className="flex items-center gap-4">
                 <div className="w-8 flex justify-center"><StatusIcon status={stage.status} /></div>
@@ -149,18 +157,10 @@ export default function JobsPage() {
                     <span className={`text-sm font-medium ${
                       stage.status === 'done' ? 'text-zinc-400' :
                       stage.status === 'running' ? 'text-white' : 'text-zinc-600'
-                    }`}>
-                      {stage.label}
-                    </span>
-                    {stage.status === 'running' && (
-                      <span className="text-xs text-[#a78bfa] font-medium animate-pulse">Processing...</span>
-                    )}
-                    {stage.status === 'done' && (
-                      <span className="text-xs text-green-500">Done</span>
-                    )}
-                    {stage.status === 'pending' && (
-                      <span className="text-xs text-zinc-700">Waiting</span>
-                    )}
+                    }`}>{stage.label}</span>
+                    {stage.status === 'running' && <span className="text-xs text-[#a78bfa] font-medium animate-pulse">Processing...</span>}
+                    {stage.status === 'done' && <span className="text-xs text-green-500">Done</span>}
+                    {stage.status === 'pending' && <span className="text-xs text-zinc-700">Waiting</span>}
                   </div>
                   {(stage.status === 'running' || stage.status === 'done') && stage.count !== undefined && (
                     <ProgressBar count={stage.count} total={stage.total} />
@@ -172,7 +172,7 @@ export default function JobsPage() {
         </div>
       </div>
 
-      {/* Actions */}
+      {/* Complete banner */}
       {doneCount === stages.length && (
         <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-5 flex items-center justify-between">
           <div>
@@ -185,5 +185,18 @@ export default function JobsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function JobsPage() {
+  return (
+    <Suspense fallback={
+      <div className="p-10 max-w-5xl">
+        <div className="h-8 w-48 bg-zinc-800 rounded animate-pulse mb-4"></div>
+        <div className="h-4 w-64 bg-zinc-800/50 rounded animate-pulse"></div>
+      </div>
+    }>
+      <JobsContent />
+    </Suspense>
   );
 }

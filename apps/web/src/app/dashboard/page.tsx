@@ -2,7 +2,7 @@ import React from 'react';
 
 async function getDashboardStats() {
   try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://api:8000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace('localhost', 'api') || 'http://api:8000';
     const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
     if (!res.ok) return null;
     return res.json();
@@ -173,7 +173,7 @@ export default async function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
-              <tr className="hover:bg-zinc-800/20 transition group cursor-pointer" onClick={() => {}}>
+              <tr className="hover:bg-zinc-800/20 transition group cursor-pointer">
                 <td className="py-4 text-white font-medium">ABC Roofing LLC</td>
                 <td className="py-4 text-zinc-400">Dallas, TX</td>
                 <td className="py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">Roofing</span></td>

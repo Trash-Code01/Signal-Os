@@ -2,7 +2,8 @@ import React from 'react';
 
 async function getLeads() {
   try {
-    const res = await fetch('http://127.0.0.1:8000/api/leads', { cache: 'no-store' });
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace('localhost', 'api') || 'http://api:8000';
+    const res = await fetch(`${apiUrl}/api/leads`, { cache: 'no-store' });
     if (!res.ok) return { leads: [] };
     return res.json();
   } catch (e) {
@@ -38,28 +39,6 @@ export default async function LeadsPipeline() {
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-4 mb-8 flex gap-4 items-center">
-        <div className="flex bg-zinc-900 rounded-md p-1 border border-zinc-800">
-          <button className="bg-zinc-800 text-green-500 text-xs font-bold px-3 py-1.5 rounded shadow-sm">A+ · 41</button>
-          <button className="text-zinc-400 hover:text-white text-xs font-bold px-3 py-1.5 rounded transition">A · 73</button>
-        </div>
-        <select className="bg-zinc-900 border border-zinc-800 text-sm text-zinc-300 rounded-md px-4 py-2 outline-none appearance-none">
-          <option>Industry: All</option>
-        </select>
-        <select className="bg-zinc-900 border border-zinc-800 text-sm text-zinc-300 rounded-md px-4 py-2 outline-none appearance-none">
-          <option>Location: All</option>
-        </select>
-        <select className="bg-zinc-900 border border-zinc-800 text-sm text-zinc-300 rounded-md px-4 py-2 outline-none appearance-none">
-          <option>Offer: All</option>
-        </select>
-        <input 
-          type="text" 
-          placeholder="Search companies..." 
-          className="ml-auto bg-zinc-900 border border-zinc-800 text-sm text-white rounded-md px-4 py-2 outline-none focus:border-zinc-600 w-64"
-        />
-      </div>
-
       {/* Table */}
       <div className="bg-[#121214] border border-zinc-800/60 rounded-xl">
         <div className="overflow-x-auto p-2">
@@ -78,22 +57,22 @@ export default async function LeadsPipeline() {
             <tbody className="divide-y divide-zinc-800/60">
               
               {leads.length > 0 ? leads.map((lead: any) => (
-                <tr key={lead.id} className="hover:bg-zinc-800/20 transition group cursor-pointer" onClick={() => window.location.href = `/leads/${lead.id}`}>
+                <tr key={lead.id} className="hover:bg-zinc-800/20 transition group">
                   <td className="px-6 py-5 text-white font-medium">{lead.name}</td>
-                  <td className="px-6 py-5 text-zinc-400">{lead.location}</td>
+                  <td className="px-6 py-5 text-zinc-400">{lead.location || `${lead.city}, ${lead.state}`}</td>
                   <td className="px-6 py-5">
-                    <span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">Detected</span>
+                    <span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">{lead.industry || 'Detected'}</span>
                   </td>
                   <td className="px-6 py-5">
-                    <span className="text-green-500 bg-green-500/10 px-2 py-1 rounded text-xs font-bold">{lead.score}</span>
+                    <span className="text-green-500 bg-green-500/10 px-2 py-1 rounded text-xs font-bold">{lead.total_score || lead.score}</span>
                   </td>
                   <td className="px-6 py-5 text-zinc-300">Qualified</td>
                   <td className="px-6 py-5 text-zinc-400">
-                    {lead.contact || 'No Decision Maker'}
+                    {lead.contacts && lead.contacts.length > 0 ? lead.contacts[0].name : 'No Decision Maker'}
                   </td>
                   <td className="px-6 py-5 text-right">
-                    <a href={`/leads/${lead.id}`} className="text-zinc-500 group-hover:text-white transition inline-block">
-                      →
+                    <a href={`/leads/${lead.id}`} className="text-[#8b5cf6] font-medium hover:text-white transition inline-block">
+                      View →
                     </a>
                   </td>
                 </tr>
@@ -116,11 +95,11 @@ export default async function LeadsPipeline() {
         
         {/* Footer */}
         <div className="border-t border-zinc-800/60 p-4 flex justify-between items-center text-xs text-zinc-500">
-          <p>Showing 1-{Math.max(8, leads.length)} of {Math.max(164, leads.length)} qualified leads</p>
+          <p>Showing 1-{Math.min(25, leads.length)} of {leads.length} qualified leads</p>
           <div className="flex gap-1">
             <button className="w-8 h-8 rounded flex items-center justify-center bg-zinc-900 text-zinc-500 hover:text-white transition">‹</button>
             <button className="w-8 h-8 rounded flex items-center justify-center bg-[#8b5cf6] text-white font-medium">1</button>
-            <button className="w-8 h-8 rounded flex items-center justify-center bg-zinc-900 text-zinc-400 hover:text-white transition">2</button>
+            {leads.length > 25 && <button className="w-8 h-8 rounded flex items-center justify-center bg-zinc-900 text-zinc-400 hover:text-white transition">2</button>}
             <button className="w-8 h-8 rounded flex items-center justify-center bg-zinc-900 text-zinc-400 hover:text-white transition">›</button>
           </div>
         </div>

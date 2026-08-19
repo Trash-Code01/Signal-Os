@@ -210,6 +210,10 @@ def process_campaign_task(campaign_id: int):
             
             print(f"Finished pipeline for {business.name}. Score: {score_record.total_score}")
         
+        # Mark campaign as completed
+        campaign.status = "completed"
+        db.commit()
+        
         return {"status": "success", "businesses_processed": len(unique_businesses)}
         
     except Exception as e:

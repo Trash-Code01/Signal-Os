@@ -59,7 +59,7 @@ class WebsiteIntelligenceEngine:
                         found_ctas = []
                         for cta in cta_texts:
                             # Simple text search heuristic
-                            cta_count = await page.locator(f"text=/(?i){cta}/").count()
+                            cta_count = await page.locator(f"text={cta}").count()
                             if cta_count > 0:
                                 found_ctas.append(cta)
                         
