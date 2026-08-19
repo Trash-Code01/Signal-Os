@@ -23,6 +23,7 @@ from core.models import (
     JobRun,
     Opportunity,
     Score,
+    SocialProfile,
     Website,
     WebsiteAudit,
     WebsiteEvidence,
@@ -167,6 +168,7 @@ def _persist_website_research(db, business: Business, audit: Dict[str, Any]) -> 
         WebsiteTechnology(website_id=website.id, technology=item, category="detected", confidence=1.0)
         for item in technologies
     )
+    _save_social_profiles(db, business, audit.get("social_profiles") or [])
 
     page_map: Dict[str, int] = {}
     for page_url in audit.get("pages_checked") or []:
@@ -216,6 +218,56 @@ def _persist_website_research(db, business: Business, audit: Dict[str, Any]) -> 
         ))
     db.flush()
     return website, evidence_records
+
+
+def _save_social_profiles(db, business: Business, profiles: List[Dict[str, Any]]) -> int:
+    """Persist public company social links without duplicating prior crawls."""
+    existing_social_urls = {
+        profile.profile_url
+        for profile in db.query(SocialProfile).filter(SocialProfile.business_id == business.id).all()
+    }
+    saved = 0
+    for profile in profiles:
+        url = (profile.get("url") or "").strip()
+        platform = (profile.get("platform") or "").strip().lower()
+        if not url or not platform or url in existing_social_urls:
+            continue
+        db.add(SocialProfile(business_id=business.id, platform=platform, profile_url=url))
+        existing_social_urls.add(url)
+        saved += 1
+    return saved
+
+
+@celery_app.task
+def enrich_lead_contacts_task(business_id: int):
+    """Refresh a CRM lead's Apollo decision-makers and public social links."""
+    db = SessionLocal()
+    try:
+        business = db.query(Business).filter(Business.id == business_id).first()
+        if not business or not business.website_url:
+            return {"status": "skipped", "reason": "Lead has no website"}
+        audit = asyncio.run(WebsiteIntelligenceEngine().audit_website(business.website_url))
+        social_count = _save_social_profiles(db, business, audit.get("social_profiles") or [])
+        domain = _domain(business.website_url)
+        contacts = asyncio.run(ApolloProvider(db_session=db).find_emails(
+            domain=domain,
+            name=business.name
+        )) if domain else []
+        contact_count = sum(int(_save_contact(db, business.id, contact)) for contact in contacts)
+        db.add(CRMActivity(
+            business_id=business.id,
+            activity_type="enrichment",
+            body=f"Apollo decision-maker enrichment completed: {contact_count} contacts and {social_count} social profiles added.",
+            created_by="Lead Intelligence",
+        ))
+        db.commit()
+        return {"status": "completed", "contacts_added": contact_count, "social_profiles_added": social_count}
+    except Exception as exc:
+        db.rollback()
+        print(f"Lead enrichment {business_id} failed: {exc}")
+        return {"status": "failed", "error": str(exc)}
+    finally:
+        db.close()
 
 
 @celery_app.task
@@ -376,10 +428,12 @@ def process_campaign_task(campaign_id: int):
             domain = _domain(business.website_url)
             if domain:
                 provider_contacts = asyncio.run(hunter.find_emails(domain=domain))
-                # Hunter can return general inboxes. Use Apollo to seek a real
-                # owner/founder when no named professional contact was found.
-                if not any(item.get("first_name") or item.get("last_name") for item in provider_contacts):
-                    provider_contacts.extend(asyncio.run(apollo.find_emails(domain=domain, name=business.name)))
+                # Apollo is the decision-maker source. Always run it alongside
+                # Hunter so a generic website inbox never prevents us from
+                # finding the owner's name, title, work email, or LinkedIn.
+                provider_contacts.extend(asyncio.run(
+                    apollo.find_emails(domain=domain, name=business.name)
+                ))
                 for contact in provider_contacts:
                     enriched_count += int(_save_contact(db, business.id, contact))
                 db.commit()
