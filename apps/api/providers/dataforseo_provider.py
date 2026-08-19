@@ -43,9 +43,12 @@ class DataForSEOProvider(BusinessDiscoveryProvider):
                 print(f"DataForSEO location lookup failed: {task.get('status_message')}")
                 return None
             locations = task.get("result") or []
-            expected = self._normalise_location(location)
+            
+            # The campaign provides "Dallas, TX, USA" but DataForSEO returns "Dallas,Texas,United States"
+            target_city = location.split(',')[0].strip().lower()
+            
             exact = next(
-                (item for item in locations if self._normalise_location(item.get("location_name", "")) == expected),
+                (item for item in locations if item.get("location_name", "").lower().startswith(target_city) and item.get("location_type") == "City"),
                 None,
             )
             if exact:
