@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 
 class BusinessDiscoveryProvider(ABC):
     @abstractmethod
-    async def discover(self, query: str, location: str, industry: str) -> List[Dict[str, Any]]:
+    async def discover(self, query: str, location: str, industry: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Discover raw businesses based on a query and location."""
         pass
 

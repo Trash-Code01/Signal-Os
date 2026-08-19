@@ -20,6 +20,7 @@ playwright install chromium
 
 Write-Host ""
 Write-Host "[3/3] Starting backend services..." -ForegroundColor Yellow
+Write-Host "The API safely initializes the CRM workspace tables on startup." -ForegroundColor Gray
 Write-Host "Starting FastAPI Server on port 8000..." -ForegroundColor Green
 Start-Process -NoNewWindow -FilePath "uvicorn" -ArgumentList "main:app --reload --port 8000"
 

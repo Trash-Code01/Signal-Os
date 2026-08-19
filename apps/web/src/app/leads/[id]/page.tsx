@@ -33,7 +33,18 @@ export default function LeadDossier() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       const res = await fetch(`${apiUrl}/api/leads/${id}/export`, { method: 'POST' });
-      if (res.ok) setExportSuccess(true);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.download_url) {
+          const link = document.createElement('a');
+          link.href = `${apiUrl}${data.download_url}`;
+          link.download = '';
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setExportSuccess(true);
+        }
+      }
     } catch (e) {
       console.error(e);
     }
@@ -57,6 +68,10 @@ export default function LeadDossier() {
     );
   }
 
+  const websiteHref = lead.website_url
+    ? (lead.website_url.startsWith('http') ? lead.website_url : `https://${lead.website_url}`)
+    : null;
+
   return (
     <div className="p-10 max-w-[1000px] mx-auto min-h-screen pb-32">
       
@@ -71,19 +86,19 @@ export default function LeadDossier() {
       {/* Notion-Style Header */}
       <div className="mb-12">
         <div className="flex items-center gap-3 mb-4">
-          <div className="bg-zinc-800 text-zinc-300 text-xs px-2 py-1 rounded">Qualified Lead</div>
+          <div className="bg-zinc-800 text-zinc-300 text-xs px-2 py-1 rounded capitalize">{lead.stage || 'New'} lead</div>
           <div className="flex items-center gap-1 text-green-400 bg-green-400/10 px-2 py-1 rounded text-xs font-bold">
             <FiZap className="w-3 h-3" />
-            Score: {lead.score}
+            Score: {lead.commercial_score ?? '—'}
           </div>
         </div>
         <h1 className="text-5xl font-black tracking-tight mb-4 text-white">
           {lead.name}
         </h1>
         <div className="flex items-center gap-6 text-zinc-400 text-sm">
-          {lead.domain && (
-            <a href={`https://${lead.domain}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 hover:text-[#8b5cf6] transition">
-              <FiExternalLink /> {lead.domain}
+          {websiteHref && (
+            <a href={websiteHref} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 hover:text-[#8b5cf6] transition">
+              <FiExternalLink /> {lead.website_url}
             </a>
           )}
           {lead.location && <span>{lead.location}</span>}
@@ -102,7 +117,7 @@ export default function LeadDossier() {
               : 'bg-[#8b5cf6] hover:bg-[#7c3aed] text-white shadow-lg shadow-purple-500/20'
           }`}
         >
-          {exporting ? 'Exporting...' : exportSuccess ? 'Sent to n8n CRM \u2713' : 'Export to CRM / Webhook'}
+          {exporting ? 'Preparing download...' : exportSuccess ? 'CSV downloaded \u2713' : 'Download lead CSV'}
         </button>
       </div>
 

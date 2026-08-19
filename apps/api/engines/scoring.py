@@ -1,44 +1,89 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 class ScoringEngine:
-    def __init__(self, industry_config: Dict[str, Any]):
-        self.config = industry_config
-        # Example weight distribution from PDF
-        self.weights = {
-            "business_fit": 0.20,
-            "digital_gap": 0.25,
-            "offer_fit": 0.20,
-            "buying_intent": 0.20,
-            "contactability": 0.15
-        }
+    """
+    Deterministically scores leads based on digital presence and CRM fit.
+    """
+    def __init__(self, industry_config: Dict[str, Any] = None):
+        self.config = industry_config or {}
 
-    def calculate_score(self, ai_reasoning_output: Dict[str, Any]) -> int:
+    def calculate_score(self, business_data: Dict[str, Any], audit_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Calculate total score based on AI reasoning output and configuration weights.
-        The AI reasoning output should already contain raw 0-100 scores for each factor.
+        Calculates business_fit, digital_gap, offer_fit, buying_intent, contactability,
+        and aggregates into commercial_score and data_confidence.
         """
-        if not ai_reasoning_output.get("is_qualified", False):
-            return 0
-            
-        business_fit = ai_reasoning_output.get("business_fit_score", 0) * self.weights["business_fit"]
-        digital_gap = ai_reasoning_output.get("digital_gap_score", 0) * self.weights["digital_gap"]
-        offer_fit = ai_reasoning_output.get("offer_fit_score", 0) * self.weights["offer_fit"]
-        buying_intent = ai_reasoning_output.get("buying_intent_score", 0) * self.weights["buying_intent"]
-        contactability = ai_reasoning_output.get("contactability_score", 0) * self.weights["contactability"]
+        # A dead or unreachable website is not a qualified website opportunity.
+        # Never give it a score high enough to enter the sales CRM.
+        if audit_data.get("is_live") is not True:
+            return {
+                "commercial_score": 0,
+                "data_confidence": 0,
+                "grade": "Reject",
+                "business_fit": 0,
+                "digital_gap": 0,
+                "offer_fit": 0,
+                "buying_intent": 0,
+                "contactability": 0,
+            }
+
+        # 1. Data confidence: score only information that was actually found.
+        data_confidence = 35
+        if business_data.get("primary_phone"):
+            data_confidence += 20
+        if business_data.get("website_url"):
+            data_confidence += 15
+        if business_data.get("website_email"):
+            data_confidence += 20
+        if audit_data.get("pages_checked"):
+            data_confidence += 10
+
+        # 2. Business fit: a real business with a reachable website and local signals.
+        business_fit = 35
+        if business_data.get("primary_phone"):
+            business_fit += 10
+        if business_data.get("website_url"):
+            business_fit += 5
+        reviews = business_data.get("review_count") or 0
+        if reviews > 5:
+            business_fit += 5
+        if reviews > 50:
+            business_fit += 5
         
-        total_score = sum([business_fit, digital_gap, offer_fit, buying_intent, contactability])
+        # 3. Digital Gap (Where do they lack?)
+        digital_gap = 0
+        if audit_data.get("mobile_responsive") is False:
+            digital_gap += 10
+        if audit_data.get("booking_detected") is False:
+            digital_gap += 10
+        if audit_data.get("quote_form") is False:
+            digital_gap += 10
+        if audit_data.get("phone_cta") is False:
+            digital_gap += 5
+        if audit_data.get("contact_form") is False:
+            digital_gap += 5
+
+        # 4. Contactability is a quality signal, not an invented conclusion.
+        contactability = 0
+        if business_data.get("primary_phone"):
+            contactability += 8
+        if business_data.get("website_email"):
+            contactability += 12
+
+        # Calculate totals
+        commercial_score = min(100, business_fit + digital_gap + contactability)
+        grade = "C"
+        if commercial_score >= 90: grade = "A+"
+        elif commercial_score >= 80: grade = "A"
+        elif commercial_score >= 70: grade = "B"
+        elif commercial_score < 50: grade = "Reject"
         
-        return int(total_score)
-        
-    def get_grade(self, score: int) -> str:
-        """Thresholds: 90–100 = A+, 80–89 = A, 70–79 = B, 60–69 = C, below 60 = Reject."""
-        if score >= 90:
-            return "A+"
-        elif score >= 80:
-            return "A"
-        elif score >= 70:
-            return "B"
-        elif score >= 60:
-            return "C"
-        else:
-            return "Reject"
+        return {
+            "commercial_score": commercial_score,
+            "data_confidence": min(100, data_confidence),
+            "grade": grade,
+            "business_fit": business_fit,
+            "digital_gap": digital_gap,
+            "offer_fit": 0,
+            "buying_intent": 0,
+            "contactability": contactability
+        }

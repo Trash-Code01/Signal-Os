@@ -28,10 +28,17 @@ class HunterProvider(EmailProvider):
                         data = await response.json()
                         emails = []
                         for email_data in data.get("data", {}).get("emails", []):
+                            verification = email_data.get("verification") or {}
+                            verification_status = "verified" if verification.get("status") == "valid" else "unknown"
                             emails.append({
                                 "email": email_data.get("value"),
                                 "first_name": email_data.get("first_name"),
                                 "last_name": email_data.get("last_name"),
+                                "title": email_data.get("position"),
+                                "phone": email_data.get("phone_number"),
+                                "linkedin_url": email_data.get("linkedin"),
+                                "contact_type": "professional" if (email_data.get("first_name") or email_data.get("last_name")) else "company",
+                                "verification_status": verification_status,
                                 "confidence": email_data.get("confidence", 0) / 100.0,
                                 "source": "hunter"
                             })

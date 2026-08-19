@@ -20,5 +20,6 @@ COPY . .
 # Expose port for FastAPI
 EXPOSE 8000
 
-# Default command (can be overridden by docker-compose for workers)
+# The API creates the new CRM tables safely at startup. The worker command is
+# overridden by docker-compose and starts only after the API service.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
