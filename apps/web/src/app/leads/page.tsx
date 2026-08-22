@@ -1,6 +1,7 @@
 'use client';
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   FiAlertCircle,
   FiArrowUpRight,
@@ -49,6 +50,7 @@ type Contact = {
   linkedin_url?: string | null;
   contact_type?: string | null;
   source?: string | null;
+  source_url?: string | null;
   confidence?: number | null;
 };
 
@@ -132,6 +134,7 @@ type LeadDetail = Lead & {
       has_linkedin?: boolean;
     };
   };
+  social_profiles?: { platform: string; url: string; followers?: number | null }[];
   crm?: { stage: Stage; owner_name?: string | null; tags: string[]; next_follow_up_at?: string | null };
   activities: { id: number; type: string; body: string; created_at?: string | null; created_by?: string | null }[];
 };
@@ -143,6 +146,8 @@ type Filters = {
   stage: string;
   grade: string;
   campaignId: string;
+  industry: string;
+  country: string;
   contact: string;
   minScore: string;
 };
@@ -158,7 +163,7 @@ const STAGES: { value: Stage; label: string; className: string }[] = [
   { value: 'archived', label: 'Archived', className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20' },
 ];
 
-const EMPTY_FILTERS: Filters = { q: '', stage: 'all', grade: 'all', campaignId: '', contact: '', minScore: '' };
+const EMPTY_FILTERS: Filters = { q: '', stage: 'all', grade: 'all', campaignId: '', industry: 'all', country: 'all', contact: '', minScore: '' };
 
 function apiUrl() {
   return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -210,21 +215,26 @@ function LeadAvatar({ name }: { name: string }) {
   return <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-violet-400/15 text-[10px] font-bold text-violet-200">{initials}</span>;
 }
 
-function ExactLeadDossier({ lead, detail, loading, onClose }: { lead: Lead; detail: LeadDetail | null; loading: boolean; onClose: () => void }) {
-  const owner = detail?.dossier?.owner;
-  const contact = detail?.contacts?.[0] ?? lead.contacts[0];
-  const contactName = owner?.name || contact?.name || (lead.phone ? 'Business contact' : null);
-  const contactRole = owner?.role || contact?.title || (owner?.contact_type === 'company' ? 'Website contact' : 'Decision maker');
-  const contactEmail = owner?.email || contact?.email;
-  const contactPhone = owner?.phone || contact?.phone || lead.phone;
-  const contactLinkedin = owner?.linkedin_url || contact?.linkedin_url;
-  const emailVerified = owner?.email_verified || contact?.verification_status === 'verified';
+function ExactLeadDossier({ lead, detail, loading, onClose, onEnrich }: { lead: Lead; detail: LeadDetail | null; loading: boolean; onClose: () => void; onEnrich: () => void }) {
+  const contacts = detail?.contacts ?? lead.contacts ?? [];
+  // Prioritize named professional contacts first
+  const professionalContact = contacts.find((c) => c.contact_type === 'professional' && c.name && c.name !== 'Unknown contact' && c.name !== c.email);
+  const contact = professionalContact || contacts[0];
+  
+  const contactName = contact?.name && contact?.name !== contact?.email && contact?.name !== 'Unknown contact' ? contact.name : null;
+  const isGeneric = contact?.contact_type === 'company' || !contactName;
+  const contactRole = contact?.title || (isGeneric ? 'Website contact' : 'Decision maker');
+  const contactEmail = contact?.email;
+  const contactPhone = contact?.phone || lead.phone;
+  const contactLinkedin = contact?.linkedin_url;
+  const emailVerified = contact?.verification_status === 'verified';
   const metrics = detail?.dossier?.metrics;
   const digitalGaps = detail?.dossier?.digital_gaps ?? [];
   const priority = detail?.dossier?.priority === 'high' ? 'HIGH PRIORITY' : detail?.dossier?.priority === 'medium' ? 'MEDIUM PRIORITY' : 'RESEARCH LEAD';
   const location = [lead.city, lead.state_province, lead.country].filter(Boolean).join(', ') || lead.location;
   const tech = detail?.website?.cms || detail?.website?.technology_stack?.[0] || 'Technology not identified';
   const liveLabel = detail?.website?.is_live === true ? 'Live' : detail?.website?.is_live === false ? 'Unavailable' : 'Not checked';
+  const socialProfiles = detail?.social_profiles ?? [];
 
   return <aside className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[540px] flex-col border-l border-zinc-800 bg-[#101012] shadow-2xl shadow-black/70">
     <header className="border-b border-zinc-800 px-6 py-6">
@@ -236,7 +246,11 @@ function ExactLeadDossier({ lead, detail, loading, onClose }: { lead: Lead; deta
     </header>
 
     {loading ? <div className="flex flex-1 items-center justify-center text-zinc-500"><FiLoader className="mr-2 animate-spin" /> Loading lead dossier…</div> : <div className="flex-1 overflow-y-auto">
-      <section className="border-b border-zinc-800 px-6 py-5"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Owner</p>{contactName || contactEmail || contactPhone ? <div className="mt-3"><p className="text-base font-medium text-white">{contactName || 'Website contact'}</p><p className="mt-0.5 text-sm text-zinc-500">{contactRole}</p><div className="mt-3 space-y-1.5 text-sm">{contactEmail ? <a href={`mailto:${contactEmail}`} className="block break-all text-violet-200 hover:text-violet-100">{emailVerified ? '✓ Verified email: ' : '✓ Email: '}{contactEmail}</a> : <p className="text-zinc-600">— Email not found</p>}{contactPhone ? <a href={`tel:${contactPhone}`} className="block text-emerald-300 hover:text-emerald-200">✓ Phone: {contactPhone}</a> : <p className="text-zinc-600">— Phone not found</p>}{contactLinkedin ? <a href={contactLinkedin} target="_blank" rel="noreferrer" className="block text-sky-300 hover:text-sky-200">✓ LinkedIn</a> : <p className="text-zinc-600">— LinkedIn not found</p>}</div></div> : <p className="mt-3 text-sm text-zinc-600">No owner or decision maker captured yet.</p>}</section>
+      <section className="border-b border-zinc-800 px-6 py-5"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Owner</p>{contactName || contactEmail || contactPhone ? <div className="mt-3"><p className="text-base font-medium text-white">{contactName || 'Website contact'}</p><p className="mt-0.5 text-sm text-zinc-500">{contactRole}</p><div className="mt-3 space-y-1.5 text-sm">{contactEmail ? <a href={`mailto:${contactEmail}`} className="block break-all text-violet-200 hover:text-violet-100">{emailVerified ? '✓ Verified email: ' : '✉ Email: '}{contactEmail}</a> : <p className="text-zinc-600">— Email not found</p>}{contactPhone ? <a href={`tel:${contactPhone}`} className="block text-emerald-300 hover:text-emerald-200">✓ Phone: {contactPhone}</a> : <p className="text-zinc-600">— Phone not found</p>}{contactLinkedin ? <a href={contactLinkedin} target="_blank" rel="noreferrer" className="block text-sky-300 hover:text-sky-200">✓ LinkedIn</a> : <p className="text-zinc-600">— LinkedIn not found</p>}</div></div> : <p className="mt-3 text-sm text-zinc-600">No owner or decision maker captured yet.</p>}</section>
+
+      <section className="border-b border-zinc-800 px-6 py-5"><div className="flex items-center justify-between gap-3"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Decision makers & contact data</p><button onClick={onEnrich} className="border border-violet-400/30 px-2.5 py-1 text-xs text-violet-200 hover:border-violet-300 hover:text-white">Refresh contact research</button></div>{contacts.length ? <div className="mt-3 space-y-3">{contacts.map((item) => <div key={item.id} className="rounded border border-zinc-800 bg-[#141416] p-3"><div className="flex items-start justify-between gap-3"><div><p className="font-medium text-zinc-100">{item.name}</p><p className="mt-0.5 text-xs text-zinc-500">{item.title || (item.contact_type === 'company' ? 'Website contact' : 'Decision maker')} {item.source ? `| ${item.source}` : ''} {item.source_url ? <a href={item.source_url} target="_blank" rel="noreferrer" className="ml-1 inline-flex text-sky-300 hover:text-sky-200"><FiExternalLink className="mr-0.5" />Evidence</a> : null}</p></div>{item.verification_status === 'verified' && <span className="text-xs text-emerald-300">Verified</span>}</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs">{item.email && <a href={`mailto:${item.email}`} className="inline-flex items-center gap-1 text-violet-300 hover:text-violet-100"><FiMail /> {item.email}</a>}{item.phone && <a href={`tel:${item.phone}`} className="inline-flex items-center gap-1 text-emerald-300 hover:text-emerald-200"><FiPhone /> {item.phone}</a>}{item.linkedin_url && <a href={item.linkedin_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200"><FiLinkedin /> LinkedIn</a>}</div></div>)}</div> : <p className="mt-3 text-sm text-zinc-600">No enriched decision maker is available yet.</p>}</section>
+
+      <section className="border-b border-zinc-800 px-6 py-5"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Social media</p>{socialProfiles.length ? <div className="mt-3 flex flex-wrap gap-2">{socialProfiles.map((profile) => <a key={`${profile.platform}-${profile.url}`} href={profile.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs capitalize text-sky-200 hover:border-sky-400/50 hover:text-sky-100"><FiExternalLink /> {profile.platform}</a>)}</div> : <p className="mt-3 text-sm text-zinc-600">No public company social profiles were found during the website crawl.</p>}</section>
 
       <section className="border-b border-zinc-800 px-6 py-5"><p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Website</p><div className="mt-3 flex items-center gap-4 text-sm"><span className={detail?.website?.is_live === true ? 'text-emerald-300' : 'text-zinc-500'}>{detail?.website?.is_live === true ? '✓' : '—'} {liveLabel}</span><span className="text-zinc-300">{tech}</span></div><div className="mt-4 grid grid-cols-2 gap-y-2 text-sm text-zinc-300"><p>Mobile: <span className="font-medium text-white">{auditMetric(metrics?.mobile)}</span></p><p>Desktop: <span className="font-medium text-white">{auditMetric(metrics?.desktop)}</span></p><p>UX: <span className="font-medium text-white">{auditMetric(metrics?.ux)}</span></p><p>Conversion: <span className="font-medium text-white">{auditMetric(metrics?.conversion)}</span></p></div></section>
 
@@ -254,12 +268,27 @@ function ExactLeadDossier({ lead, detail, loading, onClose }: { lead: Lead; deta
 }
 
 export default function LeadsPipeline() {
+  const router = useRouter();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [industries, setIndustries] = useState<string[]>([]);
+  const [countries, setCountries] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Read initial filters from URL
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlCampaignId = params.get('campaignId');
+      if (urlCampaignId) {
+        setFilters(prev => ({ ...prev, campaignId: urlCampaignId }));
+      }
+    }
+  }, []);
+
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
   const [detail, setDetail] = useState<LeadDetail | null>(null);
@@ -280,6 +309,8 @@ export default function LeadsPipeline() {
     if (filters.stage !== 'all') params.set('stage', filters.stage);
     if (filters.grade !== 'all') params.set('grade', filters.grade);
     if (filters.campaignId) params.set('campaign_id', filters.campaignId);
+    if (filters.industry && filters.industry !== 'all') params.set('industry', filters.industry);
+    if (filters.country && filters.country !== 'all') params.set('country', filters.country);
     if (filters.contact) params.set('has_contact', filters.contact);
     if (filters.minScore) params.set('min_score', filters.minScore);
     params.set('qualified_only', 'true');
@@ -297,6 +328,8 @@ export default function LeadsPipeline() {
       setLeads(data.leads ?? []);
       setTotal(data.total ?? 0);
       setCampaigns(data.facets?.campaigns ?? []);
+      setIndustries(data.facets?.industries ?? []);
+      setCountries(data.facets?.countries ?? []);
       setSelectedIds((current) => current.filter((id) => data.leads?.some((lead: Lead) => lead.id === id)));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not load the CRM');
@@ -483,9 +516,11 @@ export default function LeadsPipeline() {
               <select value={filters.stage} onChange={(event) => updateFilters({ stage: event.target.value })} className="h-9 border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="all">All stages</option>{STAGES.map((stage) => <option key={stage.value} value={stage.value}>{stage.label}</option>)}</select>
               <select value={filters.grade} onChange={(event) => updateFilters({ grade: event.target.value })} className="h-9 border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="all">All scores</option><option value="A+">A+ prospects</option><option value="A">A prospects</option><option value="B">B prospects</option><option value="C">C prospects</option></select>
               <select value={filters.campaignId} onChange={(event) => updateFilters({ campaignId: event.target.value })} className="h-9 max-w-[200px] border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="">All campaigns</option>{campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}</select>
+              <select value={filters.industry} onChange={(event) => updateFilters({ industry: event.target.value })} className="h-9 max-w-[200px] border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="all">All industries</option>{industries.map((industry) => <option key={industry} value={industry}>{industry}</option>)}</select>
+              <select value={filters.country} onChange={(event) => updateFilters({ country: event.target.value })} className="h-9 max-w-[200px] border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="all">All countries</option>{countries.map((country) => <option key={country} value={country}>{country}</option>)}</select>
               <select value={filters.contact} onChange={(event) => updateFilters({ contact: event.target.value })} className="h-9 border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="">Any contact</option><option value="true">Has contact</option><option value="false">No contact</option></select>
               <select value={filters.minScore} onChange={(event) => updateFilters({ minScore: event.target.value })} className="h-9 border border-zinc-800 bg-[#0e0e10] px-3 text-sm text-zinc-300 outline-none hover:border-zinc-600"><option value="">Any score</option><option value="90">90+ score</option><option value="80">80+ score</option><option value="70">70+ score</option></select>
-              {(filters.q || filters.stage !== 'all' || filters.grade !== 'all' || filters.campaignId || filters.contact || filters.minScore) && <button onClick={() => setFilters(EMPTY_FILTERS)} className="h-9 px-2 text-sm text-zinc-500 hover:text-white">Clear</button>}
+              {(filters.q || filters.stage !== 'all' || filters.grade !== 'all' || filters.campaignId || filters.industry !== 'all' || filters.country !== 'all' || filters.contact || filters.minScore) && <button onClick={() => setFilters(EMPTY_FILTERS)} className="h-9 px-2 text-sm text-zinc-500 hover:text-white">Clear</button>}
             </div>
             <div className="flex items-center gap-5 text-sm">
               <button onClick={() => updateFilters({ stage: 'all' })} className={`border-b-2 px-1 pb-3 ${filters.stage === 'all' ? 'border-violet-400 text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}>All <span className="ml-1 text-xs text-zinc-600">{total}</span></button>
@@ -502,11 +537,13 @@ export default function LeadsPipeline() {
           </div>}
 
           <div className="overflow-x-auto">
-            <table className="min-w-[1220px] w-full text-left text-sm">
+            <table className="min-w-[1400px] w-full text-left text-sm">
               <thead className="border-b border-zinc-800 bg-[#101012] text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>
                   <th className="w-10 px-4 py-3"><input type="checkbox" checked={leads.length > 0 && selectedIds.length === leads.length} onChange={toggleAll} className="accent-violet-500" aria-label="Select all visible leads" /></th>
                   <th className="min-w-[250px] px-2 py-3 font-medium">Company</th>
+                  <th className="min-w-[135px] px-3 py-3 font-medium">Industry</th>
+                  <th className="min-w-[100px] px-3 py-3 font-medium">Country</th>
                   <th className="min-w-[135px] px-3 py-3 font-medium">Stage</th>
                   <th className="min-w-[85px] px-3 py-3 font-medium">Score</th>
                   <th className="min-w-[185px] px-3 py-3 font-medium">Contact</th>
@@ -517,11 +554,13 @@ export default function LeadsPipeline() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/80">
-                {loading ? <tr><td colSpan={9} className="px-5 py-20 text-center text-zinc-500"><FiLoader className="mx-auto mb-3 animate-spin text-xl text-violet-300" />Loading your CRM…</td></tr> : leads.length === 0 ? <tr><td colSpan={9} className="px-5 py-20 text-center"><FiUsers className="mx-auto mb-3 text-3xl text-zinc-700" /><p className="font-medium text-white">No qualified campaign leads yet</p><p className="mt-1 text-sm text-zinc-500">Mock, unreachable, and contactless records are intentionally hidden. Run a live campaign or import your own contacts.</p></td></tr> : leads.map((lead) => {
+                {loading ? <tr><td colSpan={11} className="px-5 py-20 text-center text-zinc-500"><FiLoader className="mx-auto mb-3 animate-spin text-xl text-violet-300" />Loading your CRM…</td></tr> : leads.length === 0 ? <tr><td colSpan={11} className="px-5 py-20 text-center"><FiUsers className="mx-auto mb-3 text-3xl text-zinc-700" /><p className="font-medium text-white">No qualified campaign leads yet</p><p className="mt-1 text-sm text-zinc-500">Mock, unreachable, and contactless records are intentionally hidden. Run a live campaign or import your own contacts.</p></td></tr> : leads.map((lead) => {
                   const primaryContact = lead.contacts[0];
-                  return <tr key={lead.id} onClick={() => void loadDetail(lead)} className={`group cursor-pointer ${activeLead?.id === lead.id ? 'bg-violet-400/[0.06]' : 'hover:bg-zinc-800/40'}`}>
+                  return <tr key={lead.id} onClick={() => router.push('/leads/' + lead.id)} className={`group cursor-pointer ${activeLead?.id === lead.id ? 'bg-violet-400/[0.06]' : 'hover:bg-zinc-800/40'}`}>
                     <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selectedIds.includes(lead.id)} onChange={() => toggleLead(lead.id)} className="accent-violet-500" aria-label={`Select ${lead.name}`} /></td>
                     <td className="px-2 py-3"><div className="flex items-center gap-3"><LeadAvatar name={lead.name} /><div className="min-w-0"><p className="truncate font-medium text-zinc-100">{lead.name}</p><p className="mt-0.5 truncate text-xs text-zinc-500">{lead.website_url?.replace(/^https?:\/\//, '') || lead.industry || 'No website added'}</p></div></div></td>
+                    <td className="px-3 py-3"><span className="block max-w-[130px] truncate text-xs text-zinc-400">{lead.industry || '—'}</span></td>
+                    <td className="px-3 py-3"><span className="block max-w-[90px] truncate text-xs text-zinc-400">{lead.country || '—'}</span></td>
                     <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}><select value={lead.stage} onChange={(event) => void updateLead(lead.id, { stage: event.target.value })} className={`max-w-[126px] border px-2 py-1 text-xs font-medium outline-none ${stageMeta(lead.stage).className}`}><option value={lead.stage}>{stageMeta(lead.stage).label}</option>{STAGES.filter((stage) => stage.value !== lead.stage).map((stage) => <option key={stage.value} value={stage.value} className="bg-[#18181b] text-zinc-100">{stage.label}</option>)}</select></td>
                     <td className="px-3 py-3"><span className={`inline-flex min-w-11 items-center justify-center px-2 py-1 text-xs font-semibold ${scoreClass(lead.commercial_score)}`}>{lead.commercial_score ?? '—'}{lead.grade ? <span className="ml-1 opacity-70">{lead.grade}</span> : null}</span></td>
                     <td className="px-3 py-3"><div className="min-w-0">{primaryContact ? <><p className="truncate text-zinc-300">{primaryContact.contact_type === 'company' ? 'Website contact' : primaryContact.name}</p><p className="truncate text-xs text-violet-300">{primaryContact.email || primaryContact.phone || lead.phone || 'Contact details unavailable'}</p></> : lead.phone ? <><p className="text-zinc-300">Business phone</p><p className="truncate text-xs text-emerald-300">{lead.phone}</p></> : <span className="text-xs text-zinc-600">No contact found</span>}</div></td>
@@ -538,7 +577,7 @@ export default function LeadsPipeline() {
         </section>
       </div>
 
-      {activeData && <ExactLeadDossier lead={activeData} detail={detail} loading={detailLoading} onClose={() => { setActiveLead(null); setDetail(null); }} />}
+      {/* Replaced with full page router in leads/[id] */}
       {/* Previous expanded drawer retained below only as an implementation reference.
         <header className="border-b border-zinc-800 bg-gradient-to-br from-violet-500/[0.10] via-[#141218] to-[#101012] px-6 py-6">
           <div className="flex items-start justify-between gap-4">

@@ -98,34 +98,91 @@ def _existing_business(db, data: Dict[str, Any]) -> Optional[Business]:
 
 
 def _save_contact(db, business_id: int, data: Dict[str, Any]) -> bool:
-    """Save only usable, provider-sourced contact facts and avoid duplicates."""
+    """Save contact facts. Allows named leaders without email/phone. Merges duplicates."""
     email = (data.get("email") or "").strip().lower() or None
     phone = (data.get("phone") or data.get("mobile") or "").strip() or None
-    if not email and not phone:
+    linkedin_url = (data.get("linkedin_url") or "").strip() or None
+    first_name = (data.get("first_name") or "").strip()
+    last_name = (data.get("last_name") or "").strip()
+    title = (data.get("title") or "").strip()
+    
+    # Must have either email, phone, or a valid name
+    if not email and not phone and not (first_name and last_name):
         return False
+        
+    full_name = f"{first_name} {last_name}".strip().lower()
 
-    duplicate_query = db.query(DecisionMaker).filter(DecisionMaker.business_id == business_id)
-    if email:
-        duplicate_query = duplicate_query.filter(DecisionMaker.email == email)
-    elif phone:
-        duplicate_query = duplicate_query.filter(or_(DecisionMaker.phone == phone, DecisionMaker.mobile == phone))
-    if duplicate_query.first():
+    # Find duplicate candidates
+    existing_contacts = db.query(DecisionMaker).filter(DecisionMaker.business_id == business_id).all()
+    match = None
+    
+    # 1. Match by email
+    if not match and email:
+        match = next((c for c in existing_contacts if c.email and c.email.lower() == email), None)
+        
+    # 2. Match by LinkedIn
+    if not match and linkedin_url:
+        match = next((c for c in existing_contacts if c.linkedin_url and c.linkedin_url == linkedin_url), None)
+        
+    # 3. Match by name and title (if it's a named professional)
+    if not match and first_name and last_name:
+        for c in existing_contacts:
+            if not c.first_name or not c.last_name:
+                continue
+            c_name = f"{c.first_name} {c.last_name}".strip().lower()
+            if c_name == full_name:
+                # If titles exist, maybe verify they are somewhat similar or just trust the name match
+                match = c
+                break
+                
+    # 4. Match by direct phone
+    if not match and phone:
+        match = next((c for c in existing_contacts if (c.phone and c.phone == phone) or (c.mobile and c.mobile == phone)), None)
+        
+    source = data.get("source") or "unknown"
+    source_url = data.get("source_url") or None
+    
+    if match:
+        # Merge new info into the existing record
+        updated = False
+        if email and not match.email:
+            match.email = email
+            updated = True
+        if phone and not match.phone:
+            match.phone = phone
+            updated = True
+        if linkedin_url and not match.linkedin_url:
+            match.linkedin_url = linkedin_url
+            updated = True
+        if first_name and not match.first_name:
+            match.first_name = first_name
+            match.last_name = last_name
+            updated = True
+        if source_url and not match.source_url:
+            match.source_url = source_url
+            updated = True
+            
+        if updated:
+            db.commit()
+            return True
         return False
 
     db.add(DecisionMaker(
         business_id=business_id,
-        first_name=data.get("first_name") or None,
-        last_name=data.get("last_name") or None,
-        title=data.get("title") or None,
+        first_name=first_name or None,
+        last_name=last_name or None,
+        title=title or None,
         email=email,
         phone=phone,
         mobile=(data.get("mobile") or "").strip() or None,
-        linkedin_url=data.get("linkedin_url") or None,
+        linkedin_url=linkedin_url,
         contact_type=data.get("contact_type") or "professional",
         verification_status=data.get("verification_status") or "unknown",
         confidence=data.get("confidence"),
-        source=data.get("source") or "unknown",
+        source=source,
+        source_url=source_url,
     ))
+    db.commit()
     return True
 
 
@@ -246,26 +303,45 @@ def enrich_lead_contacts_task(business_id: int):
         business = db.query(Business).filter(Business.id == business_id).first()
         if not business or not business.website_url:
             return {"status": "skipped", "reason": "Lead has no website"}
+        
         audit = asyncio.run(WebsiteIntelligenceEngine().audit_website(business.website_url))
         social_count = _save_social_profiles(db, business, audit.get("social_profiles") or [])
+        
+        # 1. Save public people found on the website
+        public_people = audit.get("public_people") or []
+        website_contact_count = sum(int(_save_contact(db, business.id, person)) for person in public_people)
+        
+        # 2. Serper Google-result fallback if no named professional exists.
+        serper_count = 0
+        from providers.serper_search_provider import SerperSearchProvider
+        # Check if we already found a professional named contact (from website or prior)
+        existing_professionals = [c for c in db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all() if c.contact_type == 'professional' and c.first_name and c.last_name]
+        
+        if not existing_professionals:
+            serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city))
+            serper_count = sum(int(_save_contact(db, business.id, contact)) for contact in serper_contacts)
+            
+        # 3. Apollo Premium Enrichment
         domain = _domain(business.website_url)
         contacts = asyncio.run(ApolloProvider(db_session=db).find_emails(
             domain=domain,
             name=business.name
         )) if domain else []
-        contact_count = sum(int(_save_contact(db, business.id, contact)) for contact in contacts)
+        apollo_count = sum(int(_save_contact(db, business.id, contact)) for contact in contacts)
+        
+        total_contacts = website_contact_count + serper_count + apollo_count
         db.add(CRMActivity(
             business_id=business.id,
             activity_type="enrichment",
-            body=f"Apollo decision-maker enrichment completed: {contact_count} contacts and {social_count} social profiles added.",
+            body=f"Contact research completed: {total_contacts} public decision makers found ({website_contact_count} from website, {serper_count} from Google web search, {apollo_count} from Apollo) and {social_count} social profiles added.",
             created_by="Lead Intelligence",
         ))
         db.commit()
-        return {"status": "completed", "contacts_added": contact_count, "social_profiles_added": social_count}
+        return {"status": "completed", "contacts_added": total_contacts, "social_profiles_added": social_count}
     except Exception as exc:
         db.rollback()
         print(f"Lead enrichment {business_id} failed: {exc}")
-        return {"status": "failed", "error": str(exc)}
+        return {"status": "failed"}
     finally:
         db.close()
 
@@ -287,7 +363,16 @@ def process_campaign_task(campaign_id: int):
 
         config = db.query(IndustryConfig).filter(IndustryConfig.id == campaign.industry_id).first()
         industry_config = getattr(config, "settings", None) or getattr(config, "signals", None) or {}
-        industry_name = campaign.industry.name if campaign.industry else "Local business"
+        industry_raw = campaign.industry.name if campaign.industry else "Local business"
+        # Map internal industry values to search-friendly Google Maps terms
+        industry_map = {
+            "d2c": "ecommerce",
+            "wedding": "wedding photography",
+            "clinic": "clinic medical",
+            "real_estate": "real estate",
+        }
+        search_term = industry_map.get(industry_raw.lower(), industry_raw)
+        industry_name = search_term
         quality_threshold = max(0, min(int(campaign.min_quality_score or 80), 100))
         target_quantity = max(1, int(campaign.target_quantity or 1))
         locations = db.query(CampaignLocation).filter(CampaignLocation.campaign_id == campaign_id).all()
@@ -313,7 +398,7 @@ def process_campaign_task(campaign_id: int):
             if remaining <= 0:
                 break
             raw_businesses.extend(asyncio.run(provider.discover(
-                query=f"{industry_name} contractors",
+                query=industry_name,
                 location=_location_label(location),
                 industry=industry_name,
                 limit=min(per_location_limit, remaining),
@@ -425,14 +510,28 @@ def process_campaign_task(campaign_id: int):
                 db.commit()
                 continue
 
+            # 1. Save public people found on the website
+            public_people = audit.get("public_people") or []
+            for person in public_people:
+                _save_contact(db, business.id, person)
+
             domain = _domain(business.website_url)
             if domain:
                 provider_contacts = asyncio.run(hunter.find_emails(domain=domain))
+                
+                # 2. Serper Google-result fallback if no named professional exists
+                from providers.serper_search_provider import SerperSearchProvider
+                existing_professionals = [c for c in db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all() if c.contact_type == 'professional' and c.first_name and c.last_name]
+                if not existing_professionals:
+                    serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city))
+                    provider_contacts.extend(serper_contacts)
+                
+                # 3. Apollo Premium Enrichment
                 # Apollo is the decision-maker source. Always run it alongside
                 # Hunter so a generic website inbox never prevents us from
                 # finding the owner's name, title, work email, or LinkedIn.
                 provider_contacts.extend(asyncio.run(
-                    apollo.find_emails(domain=domain, name=business.name)
+                    apollo.find_emails(domain=domain, name=business.name, business_id=business.id)
                 ))
                 for contact in provider_contacts:
                     enriched_count += int(_save_contact(db, business.id, contact))

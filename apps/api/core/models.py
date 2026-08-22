@@ -226,7 +226,8 @@ class DecisionMaker(Base):
     contact_type = Column(String(50)) # professional, personal
     verification_status = Column(String(50)) # verified, risky, unknown
     confidence = Column(Float)
-    source = Column(String(100)) # e.g. Apollo, Hunter
+    source = Column(String(100)) # e.g. apollo, hunter, website_public, brave_search
+    source_url = Column(String(2048)) # Specific URL where the contact was found (e.g. LinkedIn or About page)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 # ==========================================

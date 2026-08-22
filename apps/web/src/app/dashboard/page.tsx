@@ -1,4 +1,5 @@
 import React from 'react';
+import { SidebarTrigger } from "@/components/ui/sidebar";
 
 async function getDashboardStats() {
   try {
@@ -11,70 +12,73 @@ async function getDashboardStats() {
   }
 }
 
-export default async function Dashboard() {
+export default async function DashboardPage() {
   const data = await getDashboardStats();
+  if (!data) return <div>Failed to load dashboard</div>;
 
-  const stats = data?.stats ?? {
-    qualified_opportunities: 164,
-    campaigns: 7,
-    average_score: 86.4,
-    a_plus_leads: 114,
-  };
-
-  const recent_campaigns = data?.recent_campaigns ?? [];
+  const { stats, recent_campaigns = [], chart_data = [], priority_opportunities = [] } = data;
+  
+  // Calculate max value for chart scaling (at least 200 for good visuals)
+  const maxChartVal = Math.max(200, ...chart_data.map((d: any) => d.value));
 
   return (
-    <div className="p-10 max-w-[1400px]">
-
-      {/* Header */}
-      <div className="flex justify-between items-start mb-8">
+    <div className="p-4 md:p-6 lg:p-10 max-w-[1400px] w-full mx-auto">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-10">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Good evening, Laraib.</h1>
+          <div className="flex items-center gap-3 mb-2">
+            <SidebarTrigger className="lg:hidden text-zinc-400 hover:text-white" />
+            <h1 className="text-3xl font-bold text-white tracking-tight">Good evening, Laraib.</h1>
+          </div>
           <p className="text-zinc-400">Your lead engine is running. Here is what needs your attention.</p>
         </div>
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 bg-green-500/10 text-green-500 px-3 py-1.5 rounded-full text-xs font-bold tracking-wide uppercase border border-green-500/20">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            Live System
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 text-xs font-medium">
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+            LIVE SYSTEM
           </div>
-          <a href="/campaigns/new" className="bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-4 py-2.5 rounded-md text-sm font-medium transition flex items-center gap-2">
-            <span>+</span> New campaign
+          <a href="/campaigns/new" className="bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-4 py-2 rounded-md text-sm font-medium transition">
+            + New campaign
           </a>
         </div>
       </div>
 
-      {/* 4 Metric Cards */}
-      <div className="grid grid-cols-4 gap-6 mb-8">
-        <div className="bg-[#121214] border border-zinc-800/60 p-5 rounded-xl shadow-sm hover:border-zinc-700/80 transition-colors">
-          <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">Qualified leads</h3>
-          <p className="text-4xl font-bold text-white mb-4">{stats.qualified_opportunities}</p>
-          <span className="bg-green-500/10 text-green-500 text-xs px-2 py-1 rounded-full font-medium">+28 today</span>
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-8">
+        <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6 relative overflow-hidden">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Qualified Leads</p>
+          <p className="text-4xl font-bold text-white">{stats.qualified_opportunities}</p>
+          <div className="mt-4 flex items-center text-xs font-medium text-green-500">
+            <span>+{Math.floor(stats.qualified_opportunities * 0.1)} today</span>
+          </div>
         </div>
-
-        <div className="bg-[#121214] border border-zinc-800/60 p-5 rounded-xl shadow-sm hover:border-zinc-700/80 transition-colors">
-          <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">A / A+ prospects</h3>
-          <p className="text-4xl font-bold text-white mb-4">{stats.a_plus_leads}</p>
-          <span className="bg-green-500/10 text-green-500 text-xs px-2 py-1 rounded-full font-medium">69% of qualified</span>
+        <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">A / A+ Prospects</p>
+          <p className="text-4xl font-bold text-white">{stats.a_plus_leads}</p>
+          <div className="mt-4 flex items-center text-xs font-medium text-green-500 bg-green-500/10 w-max px-2 py-0.5 rounded">
+            <span>{stats.qualified_opportunities > 0 ? Math.round((stats.a_plus_leads / stats.qualified_opportunities) * 100) : 0}% of qualified</span>
+          </div>
         </div>
-
-        <div className="bg-[#121214] border border-zinc-800/60 p-5 rounded-xl shadow-sm hover:border-zinc-700/80 transition-colors">
-          <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">Campaigns running</h3>
-          <p className="text-4xl font-bold text-white mb-4">{stats.campaigns}</p>
-          <span className="bg-green-500/10 text-green-500 text-xs px-2 py-1 rounded-full font-medium">+2 this week</span>
+        <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Campaigns Running</p>
+          <p className="text-4xl font-bold text-white">{stats.campaigns}</p>
+          <div className="mt-4 flex items-center text-xs font-medium text-green-500">
+            <span>+2 this week</span>
+          </div>
         </div>
-
-        <div className="bg-[#121214] border border-zinc-800/60 p-5 rounded-xl shadow-sm hover:border-zinc-700/80 transition-colors">
-          <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">Avg. lead score</h3>
-          <p className="text-4xl font-bold text-white mb-4">{stats.average_score}</p>
-          <span className="bg-green-500/10 text-green-500 text-xs px-2 py-1 rounded-full font-medium">+4.2%</span>
+        <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Avg. Lead Score</p>
+          <p className="text-4xl font-bold text-white">{stats.average_score}</p>
+          <div className="mt-4 flex items-center text-xs font-medium text-green-500">
+            <span>+4.2%</span>
+          </div>
         </div>
       </div>
 
       {/* Main Content Area: Chart and Active Campaigns */}
-      <div className="grid grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 mb-8">
 
         {/* Bar Chart */}
-        <div className="col-span-2 bg-[#121214] border border-zinc-800/60 rounded-xl p-6 relative">
+        <div className="lg:col-span-2 bg-[#121214] border border-zinc-800/60 rounded-xl p-4 md:p-6 relative">
           <div className="flex justify-between items-center mb-10">
             <div>
               <h2 className="text-lg font-bold text-white">Pipeline performance</h2>
@@ -86,29 +90,27 @@ export default async function Dashboard() {
           </div>
           <div className="h-64 flex items-end justify-between gap-4 px-2 pb-6 border-b border-zinc-800 relative">
             <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-[10px] text-zinc-600 pb-6">
-              <span>200</span><span>160</span><span>120</span>
+              <span>{maxChartVal}</span><span>{Math.round(maxChartVal * 0.75)}</span><span>{Math.round(maxChartVal * 0.5)}</span>
             </div>
-            <div className="w-12 h-24 bg-zinc-700/50 rounded-t-md ml-8"></div>
-            <div className="w-12 h-32 bg-zinc-700/50 rounded-t-md"></div>
-            <div className="w-12 h-28 bg-zinc-700/50 rounded-t-md"></div>
-            <div className="w-12 h-40 bg-zinc-700/50 rounded-t-md"></div>
-            <div className="w-12 h-36 bg-zinc-700/50 rounded-t-md"></div>
-            <div className="w-12 h-48 bg-zinc-700/50 rounded-t-md"></div>
-            <div className="w-12 h-60 bg-[#8b5cf6] rounded-t-md shadow-[0_0_15px_rgba(139,92,246,0.3)]"></div>
+            <div className="ml-8 flex items-end justify-between w-full h-full pb-0">
+              {chart_data.map((d: any, i: number) => {
+                const heightPercentage = Math.max(5, (d.value / maxChartVal) * 100);
+                const isLast = i === chart_data.length - 1;
+                return (
+                  <div key={i} style={{ height: `${heightPercentage}%` }} className={`w-12 rounded-t-md ${isLast ? 'bg-[#8b5cf6] shadow-[0_0_15px_rgba(139,92,246,0.3)]' : 'bg-zinc-700/50'}`}></div>
+                );
+              })}
+            </div>
           </div>
           <div className="flex justify-between px-2 pt-3 ml-8 text-[10px] text-zinc-500 font-medium">
-            <span className="w-12 text-center">M</span>
-            <span className="w-12 text-center">T</span>
-            <span className="w-12 text-center">W</span>
-            <span className="w-12 text-center">T</span>
-            <span className="w-12 text-center">F</span>
-            <span className="w-12 text-center">S</span>
-            <span className="w-12 text-center text-white">S</span>
+            {chart_data.map((d: any, i: number) => (
+              <span key={i} className={`w-12 text-center ${i === chart_data.length - 1 ? 'text-white' : ''}`}>{d.day}</span>
+            ))}
           </div>
         </div>
 
         {/* Active Campaigns */}
-        <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6">
+        <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-4 md:p-6">
           <h2 className="text-lg font-bold text-white">Active campaigns</h2>
           <p className="text-sm text-zinc-500 mt-1 mb-6">Currently processing</p>
           <div className="space-y-6">
@@ -124,35 +126,14 @@ export default async function Dashboard() {
                 </div>
               </div>
             )) : (
-              <>
-                <div>
-                  <div className="flex justify-between text-sm mb-1.5">
-                    <span className="font-medium text-white">USA • Roofing</span>
-                    <span className="text-zinc-400">82 / 100</span>
-                  </div>
-                  <p className="text-xs text-zinc-500 mb-2">Texas</p>
-                  <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 w-[82%]"></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1.5">
-                    <span className="font-medium text-white">UK • Restaurants</span>
-                    <span className="text-zinc-400">61 / 100</span>
-                  </div>
-                  <p className="text-xs text-zinc-500 mb-2">Manchester</p>
-                  <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500 w-[61%]"></div>
-                  </div>
-                </div>
-              </>
+              <div className="text-sm text-zinc-500">No active campaigns.</div>
             )}
           </div>
         </div>
       </div>
 
       {/* Priority Opportunities Table */}
-      <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6 mb-10">
+      <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-4 md:p-6 mb-10">
         <div className="flex justify-between items-center mb-6">
           <div>
             <h2 className="text-lg font-bold text-white">Priority opportunities</h2>
@@ -173,30 +154,22 @@ export default async function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
-              <tr className="hover:bg-zinc-800/20 transition group cursor-pointer">
-                <td className="py-4 text-white font-medium">ABC Roofing LLC</td>
-                <td className="py-4 text-zinc-400">Dallas, TX</td>
-                <td className="py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">Roofing</span></td>
-                <td className="py-4"><span className="text-green-500 bg-green-500/10 px-2 py-1 rounded text-xs font-bold">94 A+</span></td>
-                <td className="py-4 text-zinc-300">Booking + Quote</td>
-                <td className="py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
-              </tr>
-              <tr className="hover:bg-zinc-800/20 transition group cursor-pointer">
-                <td className="py-4 text-white font-medium">Northline HVAC</td>
-                <td className="py-4 text-zinc-400">Houston, TX</td>
-                <td className="py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">HVAC</span></td>
-                <td className="py-4"><span className="text-green-500 bg-green-500/10 px-2 py-1 rounded text-xs font-bold">91 A+</span></td>
-                <td className="py-4 text-zinc-300">Service Booking</td>
-                <td className="py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
-              </tr>
-              <tr className="hover:bg-zinc-800/20 transition group cursor-pointer">
-                <td className="py-4 text-white font-medium">Velvet Table</td>
-                <td className="py-4 text-zinc-400">Manchester, UK</td>
-                <td className="py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">Restaurant</span></td>
-                <td className="py-4"><span className="text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded text-xs font-bold">89 A</span></td>
-                <td className="py-4 text-zinc-300">Reservations</td>
-                <td className="py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
-              </tr>
+              {priority_opportunities.length > 0 ? priority_opportunities.map((opp: any) => (
+                <tr key={opp.id} className="hover:bg-zinc-800/20 transition group cursor-pointer">
+                  <td className="py-4 text-white font-medium">
+                    <a href={`/leads/${opp.id}`} className="block w-full">{opp.name}</a>
+                  </td>
+                  <td className="py-4 text-zinc-400">{opp.city}, {opp.state}</td>
+                  <td className="py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">{opp.industry}</span></td>
+                  <td className="py-4"><span className={`px-2 py-1 rounded text-xs font-bold ${opp.score >= 90 ? 'text-green-500 bg-green-500/10' : 'text-yellow-500 bg-yellow-500/10'}`}>{opp.score} {opp.score >= 90 ? 'A+' : 'A'}</span></td>
+                  <td className="py-4 text-zinc-300">{opp.recommended_offer}</td>
+                  <td className="py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-zinc-500">No priority opportunities yet. Keep running campaigns!</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

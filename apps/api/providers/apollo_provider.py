@@ -1,6 +1,6 @@
 import os
 import aiohttp
-import asyncio
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -45,7 +45,7 @@ class ApolloProviderPool:
 
 class ApolloProvider(EmailProvider):
     def __init__(self, db_session: Optional[Session] = None):
-        self.base_url = "https://api.apollo.io/v1"
+        self.base_url = "https://api.apollo.io/api/v1"
         self.db = db_session
         self.pool = ApolloProviderPool(self.db) if self.db else None
 
@@ -62,74 +62,142 @@ class ApolloProvider(EmailProvider):
         # Fallback
         return os.environ.get("APOLLO_API_KEY"), None
 
-    async def find_emails(self, domain: str, name: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Deep decision-maker enrichment and phone/contact data for high-value prospects."""
+    @staticmethod
+    def _contact_from_person(person: Dict[str, Any]) -> Dict[str, Any]:
+        """Map returned Apollo facts to the CRM contact shape."""
+        if isinstance(person.get("person"), dict):
+            person = person["person"]
+        phone_numbers = person.get("phone_numbers") or []
+        if isinstance(phone_numbers, dict):
+            phone_numbers = [phone_numbers]
+        first_phone = phone_numbers[0] if phone_numbers else {}
+        if isinstance(first_phone, str):
+            first_phone = {"raw_number": first_phone}
+        personal_emails = person.get("personal_emails") or []
+        return {
+            "email": person.get("email") or (personal_emails[0] if personal_emails else None),
+            "first_name": person.get("first_name"),
+            "last_name": person.get("last_name"),
+            "title": person.get("title") or person.get("headline"),
+            "phone": person.get("phone") or first_phone.get("sanitized_number") or first_phone.get("raw_number"),
+            "mobile": person.get("mobile_phone") or first_phone.get("sanitized_number") or first_phone.get("raw_number"),
+            "linkedin_url": person.get("linkedin_url"),
+            "contact_type": "professional",
+            "verification_status": "verified" if person.get("email_status") == "verified" else "unknown",
+            "confidence": 0.95,
+            "source": "apollo",
+        }
+
+    async def _handle_error(self, response: aiohttp.ClientResponse, account: Optional[ProviderAccount]) -> List[Dict[str, Any]]:
+        details = (await response.text())[:300]
+        if response.status == 429:
+            print("ApolloProvider: Rate Limit Hit (429). Initiating cooldown.")
+            if self.pool and account:
+                self.pool._mark_cooldown(account, minutes=60)
+        elif response.status in (401, 403):
+            print(f"ApolloProvider: Auth or API-scope error {response.status}. {details}")
+            if self.pool and account:
+                account.status = "exhausted"
+                self.db.commit()
+        else:
+            print(f"Apollo API error: {response.status} {details}")
+        return []
+
+    async def find_emails(self, domain: str, name: Optional[str] = None, business_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Find decision-maker contacts via Apollo.
+
+        Strategy:
+        1. Try the free-plan endpoint (/mixed_people/search, POST JSON).
+           Returns name, title, email (if plan reveals it), LinkedIn URL.
+        2. If the account has Bulk People Enrichment scope, follow up with
+           /people/bulk_match to get richer email/phone data.
+        Both calls fall back gracefully on 403 (plan restriction).
+        """
         api_key, account = await self._get_api_key()
-        
+
         if not api_key:
-            print("ApolloProvider: No valid API key available (keys exhausted or not configured). Skipping enrichment.")
+            print("ApolloProvider: No API key configured. Skipping enrichment.")
             return []
-            
-        url = f"{self.base_url}/mixed_people/search"
+
         headers = {
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",
+            "Accept": "application/json",
             "X-Api-Key": api_key,
         }
-        
-        payload = {
+
+        payload: Dict[str, Any] = {
             "q_organization_domains": [domain],
-            "person_titles": ["owner", "founder", "ceo", "president"]
+            "person_titles": ["owner", "founder", "ceo", "president", "managing director"],
+            "person_seniorities": ["c_suite", "owner"],
+            "per_page": 5,
         }
-        
         if name:
             payload["q_keywords"] = name
-            
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    
-                    if response.status == 200:
+                # ── Step 1: People Search (free plan) ─────────────────────
+                async with session.post(
+                    f"{self.base_url}/mixed_people/search",
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    if response.status == 403:
+                        details = (await response.text())[:400]
+                        print(f"ApolloProvider: Search 403 — key lacks scope or is invalid. {details}")
+                        return []
+                    if response.status != 200:
+                        return await self._handle_error(response, account)
+
+                    data = await response.json()
+                    people = data.get("people", [])[:5]
+
+                if not people:
+                    return []
+
+                # If the search already returned emails (some plans do), use them.
+                has_emails = any(p.get("email") for p in people)
+
+                if has_emails:
+                    if self.pool and account:
+                        self.pool._increment_usage(account)
+                    return [self._contact_from_person(p) for p in people]
+
+                # ── Step 2: Bulk Enrichment (paid plan, optional) ──────────
+                # Try to enrich via bulk_match to get work emails.  If the plan
+                # doesn't include this endpoint we fall back to whatever the
+                # search gave us (name + title + LinkedIn).
+                person_ids = [p.get("id") for p in people if p.get("id")]
+                if not person_ids:
+                    return [self._contact_from_person(p) for p in people]
+
+                enrich_payload = {
+                    "details": [{"id": pid} for pid in person_ids],
+                    "reveal_personal_emails": os.environ.get("APOLLO_REVEAL_PERSONAL_EMAILS", "false").lower() == "true",
+                }
+                async with session.post(
+                    f"{self.base_url}/people/bulk_match",
+                    headers=headers,
+                    json=enrich_payload,
+                ) as enrich_resp:
+                    if enrich_resp.status == 403:
+                        # Paid scope not available — use search-only results
+                        print("ApolloProvider: Bulk enrichment 403 (paid scope). Using search-only results (name/title/LinkedIn).")
                         if self.pool and account:
                             self.pool._increment_usage(account)
-                            
-                        data = await response.json()
-                        contacts = []
-                        for person in data.get("people", []):
-                            phone_numbers = person.get("phone_numbers") or []
-                            first_phone = phone_numbers[0] if phone_numbers else {}
-                            contacts.append({
-                                "email": person.get("email"),
-                                "first_name": person.get("first_name"),
-                                "last_name": person.get("last_name"),
-                                "title": person.get("title"),
-                                "phone": person.get("phone") or first_phone.get("sanitized_number") or first_phone.get("raw_number"),
-                                "linkedin_url": person.get("linkedin_url"),
-                                "contact_type": "professional",
-                                "verification_status": "verified" if person.get("email_status") == "verified" else "unknown",
-                                "confidence": 0.95,
-                                "source": "apollo"
-                            })
-                        return contacts
-                        
-                    elif response.status == 429: # Rate Limited
-                        print("ApolloProvider: Rate Limit Hit (429). Initiating cooldown.")
-                        if self.pool and account:
-                            self.pool._mark_cooldown(account, minutes=60)
-                        return []
-                        
-                    elif response.status == 401 or response.status == 403: # Auth error
-                        print(f"ApolloProvider: Auth error {response.status}. Key might be invalid or expired.")
-                        if self.pool and account:
-                            account.status = "exhausted"
-                            self.db.commit()
-                        return []
-                        
-                    else:
-                        details = (await response.text())[:300]
-                        print(f"Apollo API error: {response.status} {details}")
-                        return []
-                        
-        except Exception as e:
-            print(f"Error calling Apollo API: {e}")
+                        return [self._contact_from_person(p) for p in people]
+                    if enrich_resp.status != 200:
+                        await self._handle_error(enrich_resp, account)
+                        # Still return whatever the search gave us
+                        return [self._contact_from_person(p) for p in people]
+
+                    enrich_data = await enrich_resp.json()
+                    matches = enrich_data.get("matches") or enrich_data.get("people") or []
+                    if self.pool and account:
+                        self.pool._increment_usage(account)
+                    return [self._contact_from_person(m) for m in matches] if matches else [self._contact_from_person(p) for p in people]
+
+        except Exception as exc:
+            print(f"ApolloProvider: Unexpected error — {exc}")
             return []

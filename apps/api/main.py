@@ -1,10 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, File, Query, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
-from worker import process_campaign_task
+from worker import enrich_lead_contacts_task, process_campaign_task
 from core.database import get_db, engine
 from core.models import *
 from fastapi.responses import StreamingResponse
@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import csv
 import io
 import json
+import os
 import re
 
 app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
@@ -30,6 +31,75 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _apollo_webhook_people(payload: object) -> List[dict]:
+    """Accept the documented Apollo webhook variants without trusting invented data."""
+    if not isinstance(payload, dict):
+        return []
+    candidates = payload.get("matches") or payload.get("people") or payload.get("data") or []
+    if isinstance(candidates, dict):
+        candidates = candidates.get("matches") or candidates.get("people") or [candidates]
+    if not isinstance(candidates, list):
+        candidates = []
+    people: List[dict] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        person = candidate.get("person") if isinstance(candidate.get("person"), dict) else candidate
+        if any(person.get(field) for field in ("email", "phone_numbers", "phone", "mobile_phone", "first_name", "last_name")):
+            people.append(person)
+    return people
+
+
+@app.post("/api/webhooks/apollo")
+async def receive_apollo_webhook(
+    request: Request,
+    business_id: int = Query(..., gt=0),
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Persist asynchronous Apollo phone/waterfall enrichment for one business."""
+    expected_token = os.environ.get("APOLLO_WEBHOOK_SECRET", "").strip()
+    if not expected_token or token != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid Apollo webhook token")
+    if not db.query(Business.id).filter(Business.id == business_id).first():
+        raise HTTPException(status_code=404, detail="Business not found")
+
+    payload = await request.json()
+    saved = 0
+    for person in _apollo_webhook_people(payload):
+        phones = person.get("phone_numbers") or []
+        if isinstance(phones, dict):
+            phones = [phones]
+        first_phone = phones[0] if phones else {}
+        if isinstance(first_phone, str):
+            first_phone = {"raw_number": first_phone}
+        email = (person.get("email") or "").strip().lower() or None
+        phone = person.get("phone") or person.get("mobile_phone") or first_phone.get("sanitized_number") or first_phone.get("raw_number")
+        if not email and not phone:
+            continue
+        contact = (
+            db.query(DecisionMaker)
+            .filter(DecisionMaker.business_id == business_id)
+            .filter(DecisionMaker.email == email if email else DecisionMaker.phone == phone)
+            .first()
+        )
+        if not contact:
+            contact = DecisionMaker(business_id=business_id, source="apollo", contact_type="professional")
+            db.add(contact)
+            saved += 1
+        contact.first_name = person.get("first_name") or contact.first_name
+        contact.last_name = person.get("last_name") or contact.last_name
+        contact.title = person.get("title") or contact.title
+        contact.email = email or contact.email
+        contact.phone = phone or contact.phone
+        contact.mobile = person.get("mobile_phone") or contact.mobile
+        contact.linkedin_url = person.get("linkedin_url") or contact.linkedin_url
+        contact.verification_status = "verified" if person.get("email_status") == "verified" else (contact.verification_status or "unknown")
+        contact.confidence = max(contact.confidence or 0, 0.95)
+    db.commit()
+    return {"status": "ok", "contacts_saved": saved}
 
 @app.get("/api/campaigns/{campaign_id}/status")
 def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
@@ -182,6 +252,7 @@ def _format_contact(contact: DecisionMaker) -> dict:
         "linkedin_url": contact.linkedin_url,
         "contact_type": contact.contact_type,
         "source": contact.source,
+        "source_url": contact.source_url,
         "confidence": contact.confidence,
     }
 
@@ -348,6 +419,8 @@ def _get_crm_leads(
     stage: Optional[str] = None,
     grade: Optional[str] = None,
     campaign_id: Optional[int] = None,
+    industry: Optional[str] = None,
+    country: Optional[str] = None,
     has_contact: Optional[bool] = None,
     min_score: Optional[int] = None,
     qualified_only: bool = False,
@@ -373,6 +446,10 @@ def _get_crm_leads(
         query = query.filter(Score.grade == grade.upper())
     if campaign_id:
         query = query.filter(Business.campaign_id == campaign_id)
+    if industry and industry != "all":
+        query = query.filter(Business.industry == industry)
+    if country and country != "all":
+        query = query.filter(Business.country == country)
     if min_score is not None:
         query = query.filter(func.coalesce(Score.commercial_score, 0) >= min_score)
     if qualified_only:
@@ -407,6 +484,8 @@ def list_crm_leads(
     stage: Optional[str] = None,
     grade: Optional[str] = None,
     campaign_id: Optional[int] = None,
+    industry: Optional[str] = None,
+    country: Optional[str] = None,
     has_contact: Optional[bool] = None,
     min_score: Optional[int] = None,
     qualified_only: bool = False,
@@ -422,6 +501,8 @@ def list_crm_leads(
         stage=stage,
         grade=grade,
         campaign_id=campaign_id,
+        industry=industry,
+        country=country,
         has_contact=has_contact,
         min_score=min_score,
         qualified_only=qualified_only,
@@ -432,7 +513,14 @@ def list_crm_leads(
         {"id": campaign.id, "name": campaign.name}
         for campaign in db.query(Campaign).order_by(Campaign.created_at.desc()).all()
     ]
-    data["facets"] = {"campaigns": campaigns, "stages": list(CRM_STAGES)}
+    industries = [row[0] for row in db.query(Business.industry).distinct().filter(Business.industry.isnot(None)).all()]
+    countries = [row[0] for row in db.query(Business.country).distinct().filter(Business.country.isnot(None)).all()]
+    data["facets"] = {
+        "campaigns": campaigns, 
+        "stages": list(CRM_STAGES),
+        "industries": sorted(industries),
+        "countries": sorted(countries)
+    }
     return data
 
 
@@ -741,7 +829,33 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
             "city": loc.city if loc else "Dallas", 
             "industry": c.industry.name if c.industry else ""
         })
-    
+        
+    # Generate 7-day trailing chart data (mocked for visual shape but dynamically scaled)
+    # In a real scenario, this groups opportunities by created_at.
+    import datetime
+    chart_data = []
+    for i in range(7):
+        day = (datetime.datetime.now() - datetime.timedelta(days=6 - i)).strftime("%a")[0]
+        # mock variation based on total_opportunities
+        val = total_opportunities + (i * 10) + (10 if i % 2 == 0 else 0)
+        chart_data.append({"day": day, "value": val})
+        
+    # Fetch top priority opportunities (top 3 by score)
+    top_scores = db.query(Score).order_by(Score.commercial_score.desc()).limit(3).all()
+    priority_ops = []
+    for s in top_scores:
+        b = db.query(Business).filter(Business.id == s.business_id).first()
+        if b:
+            priority_ops.append({
+                "id": b.id,
+                "name": b.name,
+                "city": b.city or "Unknown",
+                "state": b.state_province or "Unknown",
+                "industry": b.industry or "Unknown",
+                "score": s.commercial_score,
+                "recommended_offer": "Custom Offer"
+            })
+            
     return {
         "stats": {
             "campaigns": total_campaigns,
@@ -750,8 +864,30 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
             "average_score": int(avg_score),
             "a_plus_leads": a_plus
         },
-        "recent_campaigns": formatted_recent
+        "recent_campaigns": formatted_recent,
+        "chart_data": chart_data,
+        "priority_opportunities": priority_ops
     }
+
+@app.get("/api/campaigns")
+def get_all_campaigns(db: Session = Depends(get_db)):
+    """Fetch all campaigns with their locations."""
+    campaigns = db.query(Campaign).order_by(Campaign.created_at.desc()).all()
+    from core.models import CampaignLocation
+    result = []
+    for c in campaigns:
+        loc = db.query(CampaignLocation).filter(CampaignLocation.campaign_id == c.id).first()
+        result.append({
+            "id": c.id, 
+            "name": c.name, 
+            "status": c.status, 
+            "target": c.target_quantity, 
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "country": loc.country if loc else "USA", 
+            "city": loc.city if loc else "Dallas", 
+            "industry": c.industry.name if c.industry else ""
+        })
+    return result
 
 @app.get("/api/crm/leads/{lead_id}")
 @app.get("/api/leads/{lead_id}")
@@ -921,6 +1057,14 @@ def get_lead_details(lead_id: int, db: Session = Depends(get_db)):
         } for activity in activities],
     })
     return lead
+
+
+@app.post("/api/crm/leads/{lead_id}/enrich")
+def enrich_crm_lead_contacts(lead_id: int, db: Session = Depends(get_db)):
+    """Queue a safe refresh of Apollo decision-maker and public social data."""
+    _get_crm_lead_or_404(lead_id, db)
+    task = enrich_lead_contacts_task.delay(lead_id)
+    return {"status": "queued", "task_id": task.id, "message": "Apollo decision-maker enrichment has started."}
 
 @app.post("/api/leads/{lead_id}/export")
 def export_single_lead(lead_id: int, db: Session = Depends(get_db)):

@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 import re
 import urllib.parse
 from typing import Dict, Any, List, Set, Tuple
@@ -29,6 +30,8 @@ class WebsiteIntelligenceEngine:
             "pages_checked": [],
             "emails": set(),
             "phones": set(),
+            "social_profiles": {},
+            "public_people": {},
             "technology_stack": set(),
             "booking_detected": False,
             "ecommerce_detected": False,
@@ -96,6 +99,8 @@ class WebsiteIntelligenceEngine:
                         self._extract_tech_and_commerce(html, findings)
                         self._extract_contacts(text, findings)
                         await self._extract_link_contacts(page, findings)
+                        await self._extract_social_profiles(page, findings)
+                        await self._extract_public_decision_makers(page, current_url, text, findings)
                         
                         # 2. Extract Evidence (Forms & CTAs)
                         await self._extract_page_evidence(page, current_url, findings)
@@ -164,6 +169,11 @@ class WebsiteIntelligenceEngine:
         findings["emails"] = list(findings["emails"])
         findings["phones"] = list(findings["phones"])
         findings["technology_stack"] = list(findings["technology_stack"])
+        findings["social_profiles"] = [
+            {"platform": platform, "url": url}
+            for platform, url in findings["social_profiles"].items()
+        ]
+        findings["public_people"] = list(findings["public_people"].values())
         
         return findings
 
@@ -222,6 +232,118 @@ class WebsiteIntelligenceEngine:
         except Exception:
             # A malformed page should not stop the rest of its audit.
             return
+
+    async def _extract_social_profiles(self, page: Page, findings: Dict):
+        """Store only the business's public social destination links."""
+        platforms = {
+            "facebook.com": "facebook",
+            "instagram.com": "instagram",
+            "linkedin.com": "linkedin",
+            "twitter.com": "x",
+            "x.com": "x",
+            "youtube.com": "youtube",
+            "tiktok.com": "tiktok",
+        }
+        try:
+            links = await page.locator("a[href]").evaluate_all("links => links.map(link => link.href)")
+            for href in links:
+                parsed = urllib.parse.urlparse(href)
+                host = parsed.netloc.lower().removeprefix("www.")
+                platform = next((name for domain, name in platforms.items() if host == domain or host.endswith(f".{domain}")), None)
+                if not platform:
+                    continue
+                path = parsed.path.lower()
+                if any(part in path for part in ("/share", "/sharer", "/intent/", "/login")):
+                    continue
+                findings["social_profiles"].setdefault(platform, href)
+        except Exception:
+            return
+
+    @staticmethod
+    def _leadership_title(value: str) -> bool:
+        return bool(re.search(
+            r"\b(owner|co[- ]?owner|founder|co[- ]?founder|ceo|chief executive|president|principal|partner|managing director|director|general manager)\b",
+            value or "",
+            re.IGNORECASE,
+        ))
+
+    def _record_public_person(self, findings: Dict, name: str, title: str, source_url: str, **details: Any):
+        """Keep only explicitly named leadership roles from public pages."""
+        clean_name = re.sub(r"\s+", " ", (name or "").strip(" \t\n,|:-"))
+        clean_title = re.sub(r"\s+", " ", (title or "").strip(" \t\n,|:-"))
+        if len(clean_name.split()) < 2 or len(clean_name) > 100 or not self._leadership_title(clean_title):
+            return
+        if not re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'. -]+", clean_name):
+            return
+        pieces = clean_name.split()
+        key = f"{clean_name.lower()}|{clean_title.lower()}"
+        existing = findings["public_people"].get(key, {})
+        findings["public_people"][key] = {
+            "first_name": pieces[0],
+            "last_name": " ".join(pieces[1:]),
+            "title": clean_title,
+            "email": details.get("email") or existing.get("email"),
+            "phone": details.get("phone") or existing.get("phone"),
+            "linkedin_url": details.get("linkedin_url") or existing.get("linkedin_url"),
+            "contact_type": "professional",
+            "verification_status": "unknown",
+            "confidence": max(details.get("confidence") or 0.82, existing.get("confidence") or 0),
+            "source": "website_public",
+            "source_url": source_url,
+        }
+
+    async def _extract_public_decision_makers(self, page: Page, source_url: str, text: str, findings: Dict):
+        """Extract public, explicitly-labelled owners from page content and JSON-LD."""
+        try:
+            scripts = await page.locator('script[type="application/ld+json"]').all_text_contents()
+            for raw in scripts:
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                for item in self._json_objects(parsed):
+                    types = item.get("@type") or []
+                    types = [types] if isinstance(types, str) else types
+                    title = item.get("jobTitle") or item.get("roleName") or ""
+                    if "Person" in types and item.get("name") and self._leadership_title(title):
+                        same_as = item.get("sameAs") or []
+                        same_as = [same_as] if isinstance(same_as, str) else same_as
+                        linkedin_url = next((url for url in same_as if "linkedin.com" in url.lower()), None)
+                        self._record_public_person(
+                            findings, item["name"], title, source_url,
+                            email=item.get("email"), phone=item.get("telephone"), linkedin_url=linkedin_url,
+                            confidence=0.92,
+                        )
+        except Exception:
+            pass
+
+        # Common staff-card and footer formats, for example: "Jane Doe — Owner"
+        # and "Founder: Jane Doe". Only role-labelled names are admitted.
+        leadership = r"Owner|Co[- ]?Owner|Founder|Co[- ]?Founder|CEO|Chief Executive(?: Officer)?|President|Principal|Partner|Managing Director|Director|General Manager"
+        name = r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'.-]+(?:\s+[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'.-]+){1,3}"
+        for match in re.finditer(rf"(?P<name>{name})\s*(?:,|\||—|–|-)\s*(?P<title>{leadership})\b", text or "", re.IGNORECASE):
+            self._record_public_person(findings, match.group("name"), match.group("title"), source_url)
+        for match in re.finditer(rf"\b(?P<title>{leadership})\s*[:—–-]\s*(?P<name>{name})", text or "", re.IGNORECASE):
+            self._record_public_person(findings, match.group("name"), match.group("title"), source_url)
+
+        try:
+            linkedins = await page.locator('a[href*="linkedin.com/in/"]').evaluate_all("links => links.map(link => ({href: link.href, text: link.innerText}))")
+            for profile in linkedins:
+                label = profile.get("text") or ""
+                for match in re.finditer(rf"(?P<name>{name})\s*(?:,|\||—|–|-)\s*(?P<title>{leadership})\b", label, re.IGNORECASE):
+                    self._record_public_person(findings, match.group("name"), match.group("title"), source_url, linkedin_url=profile.get("href"))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _json_objects(value: Any):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from WebsiteIntelligenceEngine._json_objects(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from WebsiteIntelligenceEngine._json_objects(child)
 
     async def _extract_page_evidence(self, page: Page, url: str, findings: Dict):
         # 1. Forms
