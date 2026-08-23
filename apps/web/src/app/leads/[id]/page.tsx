@@ -1,4 +1,4 @@
-﻿
+
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -16,7 +16,7 @@ export default function LeadDossier() {
     async function fetchLead() {
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const res = await fetch(`${apiUrl}/api/leads/${id}`);
+        const res = await fetch(`${apiUrl}/api/crm/leads/${id}`);
         if (res.ok) {
           setLead(await res.json());
         }
@@ -74,7 +74,7 @@ export default function LeadDossier() {
       `}</style>
       
       {/* TopAppBar */}
-      <header className="bg-[#141313]/80 backdrop-blur-md text-on-surface text-xs font-semibold uppercase tracking-wider flex justify-between items-center w-full px-4 sm:px-6 md:px-8 py-4 sticky top-0 z-40 border-b border-outline-variant/30 shadow-sm">
+      <header className="hidden md:flex bg-[#141313]/80 backdrop-blur-md text-on-surface text-xs font-semibold uppercase tracking-wider justify-between items-center w-full px-4 sm:px-6 md:px-8 py-4 sticky top-0 z-40 border-b border-outline-variant/30 shadow-sm">
         <div className="flex items-center gap-2 text-on-surface-variant text-sm lowercase tracking-normal">
           <SidebarTrigger className="lg:hidden text-outline hover:text-primary transition-colors mr-2 p-1 -ml-2" />
           <span className="material-symbols-outlined text-sm">home</span>
@@ -103,7 +103,7 @@ export default function LeadDossier() {
       {/* Page Content */}
       <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-6xl w-full flex flex-col lg:flex-row gap-6 lg:gap-10 mt-4 mx-auto pb-32">
         {/* Main Content Area */}
-        <div className="flex-1 order-2 lg:order-1">
+        <div className="flex-1">
           {/* Header Section */}
           <div className="mb-12 border-b border-outline-variant/30 pb-8">
             <div className="flex items-start justify-between mb-4">
@@ -120,26 +120,29 @@ export default function LeadDossier() {
               </div>
             </div>
             
-            <div className="flex items-center gap-3 text-sm text-on-surface-variant mb-6">
-              <span className="flex items-center gap-1">
-                <span className="material-symbols-outlined text-[16px]">domain</span> {lead.industry || "Uncategorized"}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-on-surface-variant mb-6">
+              <span className="flex items-center gap-1 whitespace-nowrap">
+                <span className="material-symbols-outlined text-[16px]">domain</span>
+                <span className="capitalize">{lead.industry || "Uncategorized"}</span>
               </span>
-              <span>•</span>
-              <span className="flex items-center gap-1">
-                <span className="material-symbols-outlined text-[16px]">location_on</span> {lead.location || "Location not set"}
+              <span className="text-outline/40">•</span>
+              <span className="flex items-center gap-1 whitespace-nowrap">
+                <span className="material-symbols-outlined text-[16px]">location_on</span>
+                <span>{lead.location || "Location not set"}</span>
               </span>
-              <span>•</span>
-              {websiteHref ? (
-                <a
-                  href={websiteHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="hover:text-primary underline decoration-outline-variant underline-offset-2 transition-colors flex items-center gap-1"
-                >
-                  <span className="material-symbols-outlined text-[16px]">link</span> {lead.website_url?.replace(/^https?:\/\//, "")}
-                </a>
-              ) : (
-                <span>No website</span>
+              {websiteHref && (
+                <>
+                  <span className="text-outline/40">•</span>
+                  <a
+                    href={websiteHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:text-primary underline decoration-outline-variant underline-offset-2 transition-colors flex items-center gap-1 min-w-0 max-w-[180px]"
+                  >
+                    <span className="material-symbols-outlined text-[16px] shrink-0">link</span>
+                    <span className="truncate">{lead.website_url?.replace(/^https?:\/\//, "")}</span>
+                  </a>
+                </>
               )}
             </div>
             
@@ -370,7 +373,7 @@ export default function LeadDossier() {
         </div>
 
         {/* Right Sidebar (Properties/Metadata) */}
-        <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
+        <div className="w-full lg:w-[320px] shrink-0">
           <div className="sticky top-[80px] bg-surface-container-low/50 border border-outline-variant/30 rounded-xl p-5 space-y-6">
             <h3 className="text-xs font-semibold text-on-surface-variant uppercase tracking-widest border-b border-outline-variant/30 pb-2">Properties</h3>
             <div className="space-y-4">

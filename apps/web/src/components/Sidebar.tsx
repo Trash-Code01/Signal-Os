@@ -3,11 +3,11 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
-  LayoutGrid, 
-  Users, 
+  PieChart, 
+  Magnet, 
   Activity, 
   PlusCircle, 
-  Folders, 
+  Megaphone, 
   Settings, 
   LogOut, 
   Search,
@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/sidebar";
 
 export function Sidebar() {
-  const pathname = usePathname();
+  const pathname = usePathname() || '';
   const { state } = useSidebar();
 
   const isActive = (path: string) => {
@@ -47,7 +47,7 @@ export function Sidebar() {
   };
 
   return (
-    <ShadcnSidebar collapsible="icon" className="border-r border-white/10 bg-[#09090b]">
+    <ShadcnSidebar collapsible="icon" className="border-r border-white/5 bg-[#09090b] text-zinc-300 hidden md:flex">
       <SidebarHeader className="p-5 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pt-5 group-data-[collapsible=icon]:items-center">
         <div className="flex items-center justify-between w-full group-data-[collapsible=icon]:justify-center">
           <div className="flex items-center gap-3 overflow-hidden group-data-[collapsible=icon]:hidden">
@@ -80,13 +80,13 @@ export function Sidebar() {
             <SidebarMenu className="space-y-0.5">
               <SidebarMenuItem>
                 <Link href="/dashboard" className={getLinkClass('/dashboard', true)}>
-                  <LayoutGrid className="w-4 h-4 shrink-0" strokeWidth={2} />
+                  <PieChart className="w-4 h-4 shrink-0" strokeWidth={2} />
                   <span className="group-data-[collapsible=icon]:hidden">Analytics</span>
                 </Link>
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <Link href="/leads" className={getLinkClass('/leads')}>
-                  <Users className="w-4 h-4 shrink-0" strokeWidth={2} />
+                  <Magnet className="w-4 h-4 shrink-0" strokeWidth={2} />
                   <span className="group-data-[collapsible=icon]:hidden">Leads</span>
                 </Link>
               </SidebarMenuItem>
@@ -108,7 +108,7 @@ export function Sidebar() {
             <SidebarMenu className="space-y-0.5">
               <SidebarMenuItem>
                 <Link href="/campaigns" className={getLinkClass('/campaigns', true)}>
-                  <Folders className="w-4 h-4 shrink-0" strokeWidth={2} />
+                  <Megaphone className="w-4 h-4 shrink-0" strokeWidth={2} />
                   <span className="group-data-[collapsible=icon]:hidden">All Campaigns</span>
                 </Link>
               </SidebarMenuItem>
@@ -129,7 +129,7 @@ export function Sidebar() {
           <SidebarGroupContent>
             <SidebarMenu className="space-y-0.5">
               <SidebarMenuItem>
-                <Link href="#" className={getLinkClass('/settings')}>
+                <Link href="/settings" className={getLinkClass('/settings')}>
                   <Settings className="w-4 h-4 shrink-0" strokeWidth={2} />
                   <span className="group-data-[collapsible=icon]:hidden">Settings</span>
                 </Link>
@@ -140,10 +140,13 @@ export function Sidebar() {
       </SidebarContent>
 
       <SidebarFooter className="p-5 mt-auto border-t border-white/5 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pb-5">
-        <Link href="#" className="flex items-center gap-3 px-3 py-2 group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:justify-center text-sm text-zinc-400 hover:text-white transition-colors mb-4">
+        <button onClick={async () => {
+          await fetch('/api/auth/logout', { method: 'POST' });
+          window.location.href = '/login';
+        }} className="flex items-center gap-3 px-3 py-2 w-full group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:justify-center text-sm text-zinc-400 hover:text-white transition-colors mb-4">
           <LogOut className="w-4 h-4 shrink-0" strokeWidth={2} />
           <span className="group-data-[collapsible=icon]:hidden">Log Out</span>
-        </Link>
+        </button>
         <div className="flex items-center gap-3 p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:border-transparent group-data-[collapsible=icon]:p-0">
           <div className="w-8 h-8 flex-shrink-0 rounded-lg bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shadow-sm border border-white/10">
             L

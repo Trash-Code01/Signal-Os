@@ -1,0 +1,117 @@
+services:
+  # 1. FastAPI Web Service
+  - type: web
+    name: devacia-api
+    env: docker
+    dockerContext: apps/api
+    dockerfilePath: apps/api/Dockerfile
+    plan: standard
+    region: ohio
+    # Override CMD to run database migrations and seeding before starting the API
+    dockerCommand: bash -c "alembic upgrade head && python seed.py && uvicorn main:app --host 0.0.0.0 --port 8000"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devacia-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: devacia-redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DISCOVERY_MODE
+        value: live
+      # Provide dummy/sync values for keys that the user will configure manually in Render dashboard
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATAFORSEO_USERNAME
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: HUNTER_API_KEY
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false
+      - key: PAGESPEED_API_KEY
+        sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
+
+  # 2. Celery Background Worker
+  - type: worker
+    name: devacia-worker
+    env: docker
+    dockerContext: apps/api
+    dockerfilePath: apps/api/Dockerfile
+    plan: standard
+    region: ohio
+    # Start the celery worker
+    dockerCommand: celery -A worker.celery_app worker --loglevel=info -P threads
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devacia-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: devacia-redis
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: SECRET_KEY
+      - key: DISCOVERY_MODE
+        value: live
+      - key: GEMINI_API_KEY
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: GEMINI_API_KEY
+      - key: DATAFORSEO_USERNAME
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: DATAFORSEO_USERNAME
+      - key: DATAFORSEO_PASSWORD
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: DATAFORSEO_PASSWORD
+      - key: HUNTER_API_KEY
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: HUNTER_API_KEY
+      - key: APOLLO_API_KEY
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: APOLLO_API_KEY
+      - key: PAGESPEED_API_KEY
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: PAGESPEED_API_KEY
+      - key: BRAVE_SEARCH_API_KEY
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: BRAVE_SEARCH_API_KEY
+
+databases:
+  # 3. PostgreSQL Database
+  - name: devacia-db
+    databaseName: devacia_os
+    user: devacia
+    plan: starter
+    region: ohio
+
+  # 4. Redis Memory Cache
+  - type: redis
+    name: devacia-redis
+    plan: starter
+    region: ohio

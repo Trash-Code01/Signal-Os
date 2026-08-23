@@ -10,9 +10,22 @@ def seed_db():
     
     db = SessionLocal()
     try:
-        # Check if already seeded
+        # Seed Admin User if not exists
+        from core.models import User
+        from core.auth import get_password_hash
+        admin_exists = db.query(User).filter(User.email == "admin@devacia.com").first()
+        if not admin_exists:
+            print("Seeding default Admin User...")
+            admin_user = User(
+                email="admin@devacia.com",
+                hashed_password=get_password_hash("admin123")
+            )
+            db.add(admin_user)
+            db.commit()
+
+        # Check if already seeded configs
         if db.query(IndustryConfig).count() > 0:
-            print("Database already seeded.")
+            print("Database already seeded with configs.")
             return
 
         print("Seeding Roofing Industry Config...")

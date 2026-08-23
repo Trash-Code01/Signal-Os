@@ -14,9 +14,11 @@ import io
 import json
 import os
 import re
+from auth import router as auth_router
 
 app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
 
+app.include_router(auth_router)
 
 @app.on_event("startup")
 def ensure_crm_workspace_schema() -> None:
@@ -513,13 +515,36 @@ def list_crm_leads(
         {"id": campaign.id, "name": campaign.name}
         for campaign in db.query(Campaign).order_by(Campaign.created_at.desc()).all()
     ]
-    industries = [row[0] for row in db.query(Business.industry).distinct().filter(Business.industry.isnot(None)).all()]
-    countries = [row[0] for row in db.query(Business.country).distinct().filter(Business.country.isnot(None)).all()]
+    # Only surface facet values for leads that are actually visible in the CRM
+    # (qualified campaign leads + all manual/import leads)
+    from sqlalchemy import or_ as _or
+    visible_industries = [
+        row[0]
+        for row in (
+            db.query(Business.industry)
+            .join(CRMLead, CRMLead.business_id == Business.id)
+            .filter(Business.industry.isnot(None))
+            .filter(_or(Business.status == "qualified", CRMLead.source.in_(("manual", "import"))))
+            .distinct()
+            .all()
+        )
+    ]
+    visible_countries = [
+        row[0]
+        for row in (
+            db.query(Business.country)
+            .join(CRMLead, CRMLead.business_id == Business.id)
+            .filter(Business.country.isnot(None))
+            .filter(_or(Business.status == "qualified", CRMLead.source.in_(("manual", "import"))))
+            .distinct()
+            .all()
+        )
+    ]
     data["facets"] = {
-        "campaigns": campaigns, 
+        "campaigns": campaigns,
         "stages": list(CRM_STAGES),
-        "industries": sorted(industries),
-        "countries": sorted(countries)
+        "industries": sorted(set(visible_industries)),
+        "countries": sorted(set(visible_countries))
     }
     return data
 

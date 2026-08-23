@@ -14,3 +14,6 @@ python-multipart==0.0.20
 alembic==1.13.1
 google-generativeai==0.7.2
 aiohttp==3.9.5
+passlib[bcrypt]==1.7.4
+PyJWT==2.8.0
+bcrypt==4.1.3

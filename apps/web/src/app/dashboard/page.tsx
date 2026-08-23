@@ -3,9 +3,11 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 
 async function getDashboardStats() {
   try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace('localhost', 'api') || 'http://api:8000';
-    const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
-    if (!res.ok) return null;
+    let res = await fetch("http://api:8000/api/dashboard", { cache: 'no-store' }).catch(() => null);
+    if (!res) {
+      res = await fetch("http://localhost:8000/api/dashboard", { cache: 'no-store' });
+    }
+    if (!res?.ok) return null;
     return res.json();
   } catch (e) {
     return null;
@@ -141,40 +143,33 @@ export default async function DashboardPage() {
           </div>
           <a href="/leads" className="text-xs text-zinc-400 hover:text-white border border-zinc-800 px-3 py-1.5 rounded-md transition">View all →</a>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-xs text-zinc-500 uppercase tracking-wider border-b border-zinc-800/60">
-                <th className="pb-3 font-medium">Company</th>
-                <th className="pb-3 font-medium">Location</th>
-                <th className="pb-3 font-medium">Industry</th>
-                <th className="pb-3 font-medium">Score</th>
-                <th className="pb-3 font-medium">Recommended Offer</th>
-                <th className="pb-3 font-medium text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/60">
-              {priority_opportunities.length > 0 ? priority_opportunities.map((opp: any) => (
-                <tr key={opp.id} className="hover:bg-zinc-800/20 transition group cursor-pointer">
-                  <td className="py-4 text-white font-medium">
-                    <a href={`/leads/${opp.id}`} className="block w-full">{opp.name}</a>
-                  </td>
-                  <td className="py-4 text-zinc-400">{opp.city}, {opp.state}</td>
-                  <td className="py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">{opp.industry}</span></td>
-                  <td className="py-4"><span className={`px-2 py-1 rounded text-xs font-bold ${opp.score >= 90 ? 'text-green-500 bg-green-500/10' : 'text-yellow-500 bg-yellow-500/10'}`}>{opp.score} {opp.score >= 90 ? 'A+' : 'A'}</span></td>
-                  <td className="py-4 text-zinc-300">{opp.recommended_offer}</td>
-                  <td className="py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
-                </tr>
-              )) : (
-                <tr>
-                  <td colSpan={6} className="py-8 text-center text-zinc-500">No priority opportunities yet. Keep running campaigns!</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <div className="space-y-4">
+          {priority_opportunities.length > 0 ? priority_opportunities.map((opp: any) => (
+            <a 
+              key={opp.id}
+              href={`/leads/${opp.id}`}
+              className="block bg-[#18181b] rounded-2xl p-5 hover:bg-zinc-800 transition-colors border border-transparent hover:border-white/5"
+            >
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <h3 className="font-bold text-white text-lg">{opp.name}</h3>
+                  <p className="text-sm text-zinc-400">{opp.industry} • {opp.city}</p>
+                </div>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${opp.score >= 90 ? "text-[#34d399] bg-[#064e3b]" : "text-[#fb923c] bg-[#431407]"}`}>
+                  {opp.score >= 90 ? "A+" : "A"} • {opp.score}
+                </span>
+              </div>
+              <div className="bg-[#121214] rounded-xl p-3">
+                <p className="text-xs text-zinc-500 mb-1 uppercase tracking-wider font-semibold">Recommended Offer</p>
+                <p className="text-sm text-[#34d399] font-medium truncate">{opp.recommended_offer}</p>
+              </div>
+            </a>
+          )) : (
+            <div className="text-center py-10 bg-[#18181b] rounded-2xl border border-dashed border-zinc-800">
+              <p className="text-zinc-500 text-sm">No priority opportunities yet. Keep running campaigns!</p>
+            </div>
+          )}
+        </div></div>
       </div>
-
-    </div>
   );
 }
