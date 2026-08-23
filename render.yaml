@@ -107,6 +107,7 @@ services:
     name: devacia-redis
     plan: starter
     region: ohio
+    ipAllowList: []
 
 databases:
   # 3. PostgreSQL Database
@@ -115,3 +116,4 @@ databases:
     user: devacia
     plan: starter
     region: ohio
+    ipAllowList: []
