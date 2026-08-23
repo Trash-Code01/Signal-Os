@@ -102,16 +102,16 @@ services:
           name: devacia-api
           envVarKey: BRAVE_SEARCH_API_KEY
 
+  # 4. Redis Memory Cache
+  - type: redis
+    name: devacia-redis
+    plan: starter
+    region: ohio
+
 databases:
   # 3. PostgreSQL Database
   - name: devacia-db
     databaseName: devacia_os
     user: devacia
-    plan: starter
-    region: ohio
-
-  # 4. Redis Memory Cache
-  - type: redis
-    name: devacia-redis
     plan: starter
     region: ohio
