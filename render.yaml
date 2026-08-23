@@ -8,7 +8,7 @@ services:
     plan: free
     region: ohio
     # Start the worker in the background (&), then start the API
-    dockerCommand: bash -c "alembic upgrade head && python seed.py && celery -A worker.celery_app worker --loglevel=info -P threads & uvicorn main:app --host 0.0.0.0 --port 8000"
+    dockerCommand: bash -c "alembic upgrade head && python seed.py && celery -A worker.celery_app worker --loglevel=info -P threads & uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
