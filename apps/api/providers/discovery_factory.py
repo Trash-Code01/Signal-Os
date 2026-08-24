@@ -3,7 +3,7 @@ import json
 import asyncio
 from typing import List, Dict, Any
 from core.providers import BusinessDiscoveryProvider
-from .dataforseo_provider import DataForSEOProvider
+from .serper_discovery_provider import SerperDiscoveryProvider
 from .mock_discovery import MockDiscoveryProvider
 
 class FixtureDiscoveryProvider(BusinessDiscoveryProvider):
@@ -26,7 +26,7 @@ def get_discovery_provider() -> BusinessDiscoveryProvider:
     mode = os.environ.get("DISCOVERY_MODE", "live").strip().lower()
 
     if mode == "live":
-        return DataForSEOProvider()
+        return SerperDiscoveryProvider()
     if mode == "fixture":
         return FixtureDiscoveryProvider()
     if mode == "mock":
