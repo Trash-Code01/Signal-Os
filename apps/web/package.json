@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && node fix-trace.js",
+    "build": "node -e \"delete process.env.VERCEL; require('child_process').execSync('npx next build', {stdio: 'inherit'})\"",
     "start": "next start",
     "lint": "eslint"
   },
