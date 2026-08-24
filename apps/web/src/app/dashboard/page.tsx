@@ -1,20 +1,43 @@
-import React from 'react';
+"use client";
+
+import React, { useEffect, useState } from 'react';
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Loader2 } from "lucide-react";
 
-async function getDashboardStats() {
-  try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
-    if (!res.ok) return null;
-    return res.json();
-  } catch (e) {
-    return null;
+export default function DashboardPage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
+        if (res.ok) {
+          setData(await res.json());
+        }
+      } catch (e) {
+        console.error("Dashboard fetch error:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchStats();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="p-4 md:p-6 lg:p-10 h-full flex flex-col items-center justify-center min-h-[500px]">
+        <Loader2 className="h-10 w-10 animate-spin text-zinc-500 mb-4" />
+        <p className="text-zinc-400 font-medium">Waking up backend server...</p>
+        <p className="text-xs text-zinc-500 mt-2 text-center max-w-sm">
+          Since the backend is on a free tier, it goes to sleep when inactive. This first request might take 30-50 seconds.
+        </p>
+      </div>
+    );
   }
-}
 
-export default async function DashboardPage() {
-  const data = await getDashboardStats();
-  if (!data) return <div>Failed to load dashboard</div>;
+  if (!data) return <div className="p-10 text-red-400">Failed to load dashboard. Ensure the backend is running.</div>;
 
   const { stats, recent_campaigns = [], chart_data = [], priority_opportunities = [] } = data;
   
