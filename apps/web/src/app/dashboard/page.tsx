@@ -3,11 +3,9 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 
 async function getDashboardStats() {
   try {
-    let res = await fetch("http://api:8000/api/dashboard", { cache: 'no-store' }).catch(() => null);
-    if (!res) {
-      res = await fetch("http://localhost:8000/api/dashboard", { cache: 'no-store' });
-    }
-    if (!res?.ok) return null;
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
+    if (!res.ok) return null;
     return res.json();
   } catch (e) {
     return null;
