@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
-  // output: "standalone", // Removed because it conflicts with Vercel's native serverless deployment trace
+  output: "standalone",
+  outputFileTracingRoot: path.join(process.cwd(), "../../"),
 };
 
 export default nextConfig;
