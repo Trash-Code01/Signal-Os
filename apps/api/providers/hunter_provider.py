@@ -5,7 +5,7 @@ from core.providers import EmailProvider
 
 class HunterProvider(EmailProvider):
     def __init__(self):
-        self.api_key = os.environ.get("HUNTER_API_KEY")
+        self.api_key = os.environ.get("HUNTER_API_KEY", "d65c059ca493917362a51ceaa34ea33677d04765")
         self.base_url = "https://api.hunter.io/v2"
 
     async def find_emails(self, domain: str, name: Optional[str] = None) -> List[Dict[str, Any]]:

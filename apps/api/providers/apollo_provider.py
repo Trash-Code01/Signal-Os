@@ -30,6 +30,20 @@ class ApolloProviderPool:
             (ProviderAccount.cooldown_until == None) | (ProviderAccount.cooldown_until < now)
         ).first()
         
+        if not account:
+            api_key = os.environ.get("APOLLO_API_KEY", "FUc0sLL0bqT181HhTUm0WQ").strip()
+            if api_key:
+                account = ProviderAccount(
+                    provider_name="apollo",
+                    api_key_ref=api_key,
+                    status="active",
+                    usage_today=0,
+                    limit_per_day=50
+                )
+                self.db.add(account)
+                self.db.commit()
+                self.db.refresh(account)
+                
         return account
 
     def _mark_cooldown(self, account: ProviderAccount, minutes: int = 60):
