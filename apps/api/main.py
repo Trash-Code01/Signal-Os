@@ -180,41 +180,48 @@ class CampaignCreateRequest(BaseModel):
 
 @app.post("/api/campaigns")
 def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db)):
-    # Create industry config if it doesn't exist
-    industry = db.query(IndustryConfig).filter(IndustryConfig.name == req.industry).first()
-    if not industry:
-        industry = IndustryConfig(name=req.industry)
-        db.add(industry)
-        db.commit()
-        db.refresh(industry)
-
-    # Create campaign
-    campaign = Campaign(
-        name=req.name,
-        industry_id=industry.id,
-        target_quantity=req.target_quantity,
-        min_quality_score=req.min_quality_score,
-        status="processing"
-    )
-    db.add(campaign)
-    db.commit()
-    db.refresh(campaign)
-
-    # Add locations
-    from core.models import CampaignLocation
-    for city in req.cities:
-        loc = CampaignLocation(
-            campaign_id=campaign.id,
-            country=req.country,
-            region_state=req.state_province,
-            city=city
+    try:
+        # Create industry config if it doesn't exist
+        industry = db.query(IndustryConfig).filter(IndustryConfig.name == req.industry).first()
+        if not industry:
+            industry = IndustryConfig(name=req.industry)
+            db.add(industry)
+            db.commit()
+            db.refresh(industry)
+    
+        # Create campaign
+        campaign = Campaign(
+            name=req.name,
+            industry_id=industry.id,
+            target_quantity=req.target_quantity,
+            min_quality_score=req.min_quality_score,
+            status="processing"
         )
-        db.add(loc)
-    db.commit()
-
-    # Trigger worker
-    task = process_campaign_task.delay(campaign.id)
-    return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id}
+        db.add(campaign)
+        db.commit()
+        db.refresh(campaign)
+    
+        # Add locations
+        from core.models import CampaignLocation
+        for city in req.cities:
+            loc = CampaignLocation(
+                campaign_id=campaign.id,
+                country=req.country,
+                region_state=req.state_province,
+                city=city
+            )
+            db.add(loc)
+        db.commit()
+    
+        # Trigger worker
+        from worker import process_campaign_task
+        task = process_campaign_task.delay(campaign.id)
+        return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id}
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=error_details)
 
 CRM_STAGES = ("new", "reviewing", "contacted", "qualified", "proposal", "won", "lost", "archived")
 
