@@ -172,7 +172,27 @@ export default function LeadDossier() {
               </div>
               <div className="grid grid-cols-1 gap-4">
                 {lead.contacts && lead.contacts.length > 0 ? (
-                  lead.contacts.map((c: any, idx: number) => (
+                  lead.contacts.map((c: any, idx: number) => {
+                    // Format source nicely
+                    let sourceLabel = c.source || "unknown";
+                    let sourceIcon = "person";
+                    if (sourceLabel.includes("website")) {
+                      sourceLabel = "Website Crawl";
+                      sourceIcon = "language";
+                    } else if (sourceLabel.includes("apollo")) {
+                      sourceLabel = "Apollo";
+                      sourceIcon = "rocket_launch";
+                    } else if (sourceLabel.includes("hunter")) {
+                      sourceLabel = "Hunter.io";
+                      sourceIcon = "track_changes";
+                    } else if (sourceLabel.includes("serper")) {
+                      sourceLabel = "Google Maps";
+                      sourceIcon = "location_on";
+                    } else {
+                      sourceLabel = sourceLabel.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+                    }
+
+                    return (
                     <div key={idx} className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 p-5 hover:border-outline-variant transition-colors relative group/card">
                       <button className="absolute top-4 right-4 text-outline hover:text-primary opacity-0 group-hover/card:opacity-100 transition-opacity">
                         <span className="material-symbols-outlined text-[18px]">edit</span>
@@ -191,7 +211,10 @@ export default function LeadDossier() {
                             {c.source && (
                               <>
                                 <span className="text-outline">|</span>
-                                <span className="text-xs bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30">{c.source}</span>
+                                <span className="text-xs bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 flex items-center gap-1">
+                                  <span className="material-symbols-outlined text-[12px]">{sourceIcon}</span>
+                                  {sourceLabel}
+                                </span>
                               </>
                             )}
                             {c.source_url && (
@@ -221,7 +244,8 @@ export default function LeadDossier() {
                         </div>
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="text-sm text-on-surface-variant italic py-4">No decision makers captured yet.</div>
                 )}
