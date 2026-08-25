@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -42,7 +42,7 @@ export default function NewCampaignPage() {
   async function handleSubmit() {
     setLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
       const res = await fetch(`${apiUrl}/api/campaigns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -100,11 +100,11 @@ export default function NewCampaignPage() {
                 step === i + 1 ? 'bg-[#8b5cf6]/20 border-[#8b5cf6]/40 text-[#a78bfa]' :
                 'border-zinc-700 text-zinc-600'
               }`}>
-                {step > i + 1 ? '✓' : i + 1}
+                {step > i + 1 ? 'âœ“' : i + 1}
               </span>
               {s}
             </button>
-            {i < 3 && <span className="text-zinc-700 px-1">—</span>}
+            {i < 3 && <span className="text-zinc-700 px-1">â€”</span>}
           </div>
         ))}
       </div>
@@ -155,7 +155,7 @@ export default function NewCampaignPage() {
           </div>
           <div className="flex justify-end">
             <button onClick={() => setStep(2)} className="w-full md:w-auto bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">
-              Next: Industry →
+              Next: Industry â†’
             </button>
           </div>
         </div>
@@ -207,8 +207,8 @@ export default function NewCampaignPage() {
             )}
           </div>
           <div className="flex gap-3 md:justify-between">
-            <button onClick={() => setStep(1)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
-            <button onClick={() => setStep(3)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Targets →</button>
+            <button onClick={() => setStep(1)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">â† Back</button>
+            <button onClick={() => setStep(3)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Targets â†’</button>
           </div>
         </div>
       )}
@@ -233,18 +233,18 @@ export default function NewCampaignPage() {
                 <p className="text-xs text-zinc-600 mt-2">Leads below this score are rejected</p>
               </div>
               <div className="pt-2">
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A+ Target <span className="text-zinc-600 normal-case">(score ≥ 90)</span></label>
+                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A+ Target <span className="text-zinc-600 normal-case">(score â‰¥ 90)</span></label>
                 <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.a_plus_target} onChange={e => setForm({ ...form, a_plus_target: +e.target.value })} />
               </div>
               <div className="pt-2">
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A Target <span className="text-zinc-600 normal-case">(score 80–89)</span></label>
+                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A Target <span className="text-zinc-600 normal-case">(score 80â€“89)</span></label>
                 <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.a_target} onChange={e => setForm({ ...form, a_target: +e.target.value })} />
               </div>
             </div>
           </div>
           <div className="flex gap-3 md:justify-between">
-            <button onClick={() => setStep(2)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
-            <button onClick={() => setStep(4)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Research →</button>
+            <button onClick={() => setStep(2)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">â† Back</button>
+            <button onClick={() => setStep(4)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Research â†’</button>
           </div>
         </div>
       )}
@@ -295,7 +295,7 @@ export default function NewCampaignPage() {
             </div>
           </div>
           <div className="flex gap-3 md:justify-between">
-            <button onClick={() => setStep(3)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
+            <button onClick={() => setStep(3)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">â† Back</button>
             <button
               onClick={handleSubmit}
               disabled={loading}
@@ -304,7 +304,7 @@ export default function NewCampaignPage() {
               {loading ? (
                 <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>Launching...</>
               ) : (
-                <>🚀 Launch Campaign</>
+                <>ðŸš€ Launch Campaign</>
               )}
             </button>
           </div>

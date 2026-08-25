@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -14,7 +14,7 @@ export default function CampaignsPage() {
   useEffect(() => {
     async function fetchCampaigns() {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace('localhost', 'api') || 'http://localhost:8000';
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
         const res = await fetch(`${apiUrl}/api/campaigns`);
         if (res.ok) {
           const data = await res.json();
@@ -102,7 +102,7 @@ export default function CampaignsPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-zinc-300">{c.target} leads</td>
-                      <td className="px-6 py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
+                      <td className="px-6 py-4 text-right text-zinc-500 group-hover:text-white transition">â†’</td>
                     </tr>
                   )) : (
                     <tr>

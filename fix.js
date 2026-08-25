@@ -1,0 +1,1 @@
+const fs = require("fs"); let text = fs.readFileSync("render.yaml", "utf-8"); text = text.replace(/uvicorn main:app --host 0\.0\.0\.0 --port .*\"/, "uvicorn main:app --host 0.0.0.0 --port $${PORT:-8000}\""); fs.writeFileSync("render.yaml", text);

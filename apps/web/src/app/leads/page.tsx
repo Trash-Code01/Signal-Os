@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -109,7 +109,7 @@ export default function LeadsPipeline() {
   const loadLeads = useCallback(async () => {
     setLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace("localhost", "api") || "http://localhost:8000";
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')?.replace("localhost", "api") || "http://localhost:8000";
       const params = new URLSearchParams();
       if (filters.q.trim()) params.set("q", filters.q.trim());
       if (filters.stage !== "all") params.set("stage", filters.stage);
@@ -217,11 +217,11 @@ export default function LeadsPipeline() {
                           <p className="font-semibold text-white group-hover:text-purple-300 transition-colors leading-tight">{lead.name}</p>
                           {lead.website_url && <p className="text-xs text-zinc-600 truncate max-w-[200px] mt-0.5">{lead.website_url.replace(/^https?:\/\//, "")}</p>}
                         </td>
-                        <td className="px-4 py-3.5 text-zinc-400 text-xs capitalize">{lead.industry || "—"}</td>
-                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap">{lead.location || "—"}</td>
+                        <td className="px-4 py-3.5 text-zinc-400 text-xs capitalize">{lead.industry || "â€”"}</td>
+                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap">{lead.location || "â€”"}</td>
                         <td className="px-4 py-3.5">
                           <span className={`${scoreClass(lead.commercial_score || 0)} px-2 py-0.5 rounded-md text-xs font-bold`}>
-                            {lead.grade || "U"} · {lead.commercial_score || 0}
+                            {lead.grade || "U"} Â· {lead.commercial_score || 0}
                           </span>
                         </td>
                         <td className="px-4 py-3.5">
@@ -237,7 +237,7 @@ export default function LeadsPipeline() {
                             </div>
                           ) : <span className="text-zinc-600 text-xs italic">No contact</span>}
                         </td>
-                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap max-w-[140px] truncate">{lead.campaign_name || "—"}</td>
+                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap max-w-[140px] truncate">{lead.campaign_name || "â€”"}</td>
                       </tr>
                     );
                   })}
@@ -291,10 +291,10 @@ export default function LeadsPipeline() {
                   <div key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}
                     className="bg-[#121214] rounded-2xl p-4 cursor-pointer active:scale-[0.98] transition-all border border-transparent hover:border-zinc-800">
                     <h2 className="text-base font-bold text-white leading-tight mb-0.5">{lead.name}</h2>
-                    <p className="text-xs text-zinc-500 mb-3">{lead.industry || "Uncategorized"} · {lead.location || "US"}</p>
+                    <p className="text-xs text-zinc-500 mb-3">{lead.industry || "Uncategorized"} Â· {lead.location || "US"}</p>
                     <div className="flex items-center gap-2 mb-3">
                       <span className={`${scoreClass(lead.commercial_score || 0)} px-2 py-0.5 rounded-md text-xs font-bold`}>
-                        {lead.grade || "U"} · {lead.commercial_score || 0}
+                        {lead.grade || "U"} Â· {lead.commercial_score || 0}
                       </span>
                       <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase ${stageColor[lead.stage?.toLowerCase()] || "bg-zinc-800 text-zinc-300"}`}>
                         {lead.stage || "new"}

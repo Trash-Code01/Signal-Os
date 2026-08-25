@@ -15,7 +15,7 @@ export default function LeadDossier() {
   useEffect(() => {
     async function fetchLead() {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
         const res = await fetch(`${apiUrl}/api/crm/leads/${id}`);
         if (res.ok) {
           setLead(await res.json());

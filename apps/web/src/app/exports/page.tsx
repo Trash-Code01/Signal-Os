@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 
@@ -53,9 +53,9 @@ export default function ExportsPage() {
         <div className="bg-[#18181b] rounded-2xl p-6">
           <h2 className="text-sm font-bold text-white mb-4">Columns included</h2>
           <div className="space-y-3 text-sm text-zinc-400 leading-relaxed font-serif">
-            <p>Company � Location � Website � Audit � Contact</p>
-            <p>Decision maker � Email � Phone � Social � Score</p>
-            <p>Evidence � Opportunity � Outreach angle</p>
+            <p>Company ï¿½ Location ï¿½ Website ï¿½ Audit ï¿½ Contact</p>
+            <p>Decision maker ï¿½ Email ï¿½ Phone ï¿½ Social ï¿½ Score</p>
+            <p>Evidence ï¿½ Opportunity ï¿½ Outreach angle</p>
           </div>
         </div>
 

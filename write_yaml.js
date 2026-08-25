@@ -1,0 +1,1 @@
+const fs = require("fs"); let text = fs.readFileSync("render.yaml", "utf-8"); text = text.replace(/dockerCommand: bash -c.*/, "dockerCommand: bash start.sh"); fs.writeFileSync("render.yaml", text);

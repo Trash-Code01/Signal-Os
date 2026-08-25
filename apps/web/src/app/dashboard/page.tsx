@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useEffect, useState } from 'react';
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -11,7 +11,7 @@ export default function DashboardPage() {
   useEffect(() => {
     async function fetchStats() {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
         const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
         if (res.ok) {
           setData(await res.json());
@@ -140,7 +140,7 @@ export default function DashboardPage() {
             {recent_campaigns.length > 0 ? recent_campaigns.map((c: any) => (
               <div key={c.id}>
                 <div className="flex justify-between text-sm mb-1.5">
-                  <span className="font-medium text-white">{c.country} • {c.industry}</span>
+                  <span className="font-medium text-white">{c.country} â€¢ {c.industry}</span>
                   <span className="text-zinc-400">{c.progress} / {c.target}</span>
                 </div>
                 <p className="text-xs text-zinc-500 mb-2">{c.city}</p>
@@ -162,7 +162,7 @@ export default function DashboardPage() {
             <h2 className="text-lg font-bold text-white">Priority opportunities</h2>
             <p className="text-sm text-zinc-500 mt-1">Highest-value leads requiring SDR action</p>
           </div>
-          <a href="/leads" className="text-xs text-zinc-400 hover:text-white border border-zinc-800 px-3 py-1.5 rounded-md transition">View all →</a>
+          <a href="/leads" className="text-xs text-zinc-400 hover:text-white border border-zinc-800 px-3 py-1.5 rounded-md transition">View all â†’</a>
         </div>
         <div className="space-y-4">
           {priority_opportunities.length > 0 ? priority_opportunities.map((opp: any) => (
@@ -174,10 +174,10 @@ export default function DashboardPage() {
               <div className="flex justify-between items-start mb-3">
                 <div>
                   <h3 className="font-bold text-white text-lg">{opp.name}</h3>
-                  <p className="text-sm text-zinc-400">{opp.industry} • {opp.city}</p>
+                  <p className="text-sm text-zinc-400">{opp.industry} â€¢ {opp.city}</p>
                 </div>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${opp.score >= 90 ? "text-[#34d399] bg-[#064e3b]" : "text-[#fb923c] bg-[#431407]"}`}>
-                  {opp.score >= 90 ? "A+" : "A"} • {opp.score}
+                  {opp.score >= 90 ? "A+" : "A"} â€¢ {opp.score}
                 </span>
               </div>
               <div className="bg-[#121214] rounded-xl p-3">

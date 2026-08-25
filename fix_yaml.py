@@ -1,0 +1,57 @@
+with open('render.yaml', 'w', encoding='utf-8') as f:
+    f.write('''services:
+  # 1. FastAPI Web Service (Also runs the Celery worker in the background for Free tier)
+  - type: web
+    name: devacia-api
+    env: docker
+    dockerContext: apps/api
+    dockerfilePath: apps/api/Dockerfile
+    plan: free
+    region: ohio
+    # Start the worker in the background (&), then start the API
+    dockerCommand: bash -c "alembic upgrade head && python seed.py && celery -A worker.celery_app worker --loglevel=info -P threads & uvicorn main:app --host 0.0.0.0 --port \$\"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devacia-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: devacia-redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DISCOVERY_MODE
+        value: live
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATAFORSEO_USERNAME
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: HUNTER_API_KEY
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false
+      - key: PAGESPEED_API_KEY
+        sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
+
+  # 2. Redis Memory Cache
+  - type: redis
+    name: devacia-redis
+    plan: free
+    region: ohio
+    ipAllowList: []
+
+databases:
+  # 3. PostgreSQL Database
+  - name: devacia-db
+    databaseName: devacia_os
+    user: devacia
+    plan: free
+    region: ohio
+    ipAllowList: []
+''')
