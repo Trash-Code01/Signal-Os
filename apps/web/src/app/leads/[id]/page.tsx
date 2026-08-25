@@ -189,7 +189,7 @@ export default function LeadDossier() {
                       sourceLabel = "Google Maps";
                       sourceIcon = "location_on";
                     } else {
-                      sourceLabel = sourceLabel.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+                      sourceLabel = sourceLabel.replace(/_/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase());
                     }
 
                     return (
