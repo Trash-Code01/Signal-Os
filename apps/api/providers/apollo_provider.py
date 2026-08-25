@@ -74,7 +74,7 @@ class ApolloProvider(EmailProvider):
                 return key, account
                 
         # Fallback
-        return os.environ.get("APOLLO_API_KEY"), None
+        return os.environ.get("APOLLO_API_KEY", "FUc0sLL0bqT181HhTUm0WQ"), None
 
     @staticmethod
     def _contact_from_person(person: Dict[str, Any]) -> Dict[str, Any]:

@@ -5,7 +5,7 @@ from core.providers import BusinessDiscoveryProvider
 
 class SerperDiscoveryProvider(BusinessDiscoveryProvider):
     def __init__(self):
-        self.api_key = os.environ.get("SERPER_API_KEY", "").strip()
+        self.api_key = os.environ.get("SERPER_API_KEY", "9da0ce52b3729b7d9c1cd60fd3ab5ab20da47eab").strip()
 
     async def discover(self, query: str, location: str, industry: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         print(f"Serper discovering: {query} in {location} for {industry}")
