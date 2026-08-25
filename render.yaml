@@ -2,13 +2,12 @@ services:
   # 1. FastAPI Web Service (Also runs the Celery worker in the background for Free tier)
   - type: web
     name: devacia-api
-    env: docker
-    dockerContext: apps/api
-    dockerfilePath: apps/api/Dockerfile
+    env: python
+    rootDir: apps/api
     plan: free
     region: ohio
-    # Start the worker in the background (&), then start the API
-    dockerCommand: bash start.sh
+    buildCommand: "pip install -r requirements.txt && playwright install chromium"
+    startCommand: "bash start.sh"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
