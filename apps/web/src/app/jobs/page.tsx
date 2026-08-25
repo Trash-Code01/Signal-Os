@@ -108,7 +108,7 @@ function JobsContent() {
           <div>
             <h1 className="text-3xl font-bold text-white">Pipeline Monitor</h1>
             <p className="text-zinc-400 mt-1">
-              {campaignId ? `Campaign #${campaignId}` : 'No campaign selected'} "” watching all stages
+              {campaignId ? `Campaign #${campaignId}` : 'No campaign selected'} " watching all stages
             </p>
           </div>
           <div className="flex items-center gap-3">

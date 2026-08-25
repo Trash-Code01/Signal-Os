@@ -217,8 +217,8 @@ export default function LeadsPipeline() {
                           <p className="font-semibold text-white group-hover:text-purple-300 transition-colors leading-tight">{lead.name}</p>
                           {lead.website_url && <p className="text-xs text-zinc-600 truncate max-w-[200px] mt-0.5">{lead.website_url.replace(/^https?:\/\//, "")}</p>}
                         </td>
-                        <td className="px-4 py-3.5 text-zinc-400 text-xs capitalize">{lead.industry || ""”"}</td>
-                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap">{lead.location || ""”"}</td>
+                        <td className="px-4 py-3.5 text-zinc-400 text-xs capitalize">{lead.industry || ""}</td>
+                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap">{lead.location || ""}</td>
                         <td className="px-4 py-3.5">
                           <span className={`${scoreClass(lead.commercial_score || 0)} px-2 py-0.5 rounded-md text-xs font-bold`}>
                             {lead.grade || "U"} · {lead.commercial_score || 0}
@@ -237,7 +237,7 @@ export default function LeadsPipeline() {
                             </div>
                           ) : <span className="text-zinc-600 text-xs italic">No contact</span>}
                         </td>
-                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap max-w-[140px] truncate">{lead.campaign_name || ""”"}</td>
+                        <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap max-w-[140px] truncate">{lead.campaign_name || ""}</td>
                       </tr>
                     );
                   })}

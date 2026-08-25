@@ -104,7 +104,7 @@ export default function NewCampaignPage() {
               </span>
               {s}
             </button>
-            {i < 3 && <span className="text-zinc-700 px-1">"”</span>}
+            {i < 3 && <span className="text-zinc-700 px-1">"</span>}
           </div>
         ))}
       </div>
