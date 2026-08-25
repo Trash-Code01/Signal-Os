@@ -232,7 +232,14 @@ export default function LeadsPipeline() {
                         <td className="px-4 py-3.5">
                           {contact ? (
                             <div>
-                              <p className="text-white text-xs font-medium truncate max-w-[150px]">{contact.name}</p>
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <p className="text-white text-xs font-medium truncate max-w-[150px]">{contact.name}</p>
+                                {contact.source && (
+                                  <span className="text-[9px] uppercase tracking-wider text-zinc-500 bg-zinc-800/50 px-1.5 py-0.5 rounded">
+                                    {contact.source}
+                                  </span>
+                                )}
+                              </div>
                               {contact.email && <p className="text-emerald-400 text-xs truncate max-w-[150px]">{contact.email}</p>}
                             </div>
                           ) : <span className="text-zinc-600 text-xs italic">No contact</span>}
@@ -301,7 +308,14 @@ export default function LeadsPipeline() {
                       </span>
                     </div>
                     <div className="bg-[#09090b] rounded-xl p-3">
-                      <p className="text-sm font-medium text-white truncate">{contact?.name || "No primary contact"}</p>
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <p className="text-sm font-medium text-white truncate">{contact?.name || "No primary contact"}</p>
+                        {contact?.source && (
+                          <span className="text-[9px] uppercase tracking-wider text-zinc-500 bg-zinc-800/50 px-1.5 py-0.5 rounded">
+                            {contact.source}
+                          </span>
+                        )}
+                      </div>
                       {contact?.email ? <p className="text-xs text-emerald-400 truncate">{contact.email}</p> : <p className="text-xs text-zinc-600">Contact details pending</p>}
                     </div>
                   </div>
