@@ -52,7 +52,14 @@ class WebsiteIntelligenceEngine:
 
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch()
+                browser = await p.chromium.launch(
+                    args=[
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-gpu',
+                        '--disable-setuid-sandbox'
+                    ]
+                )
                 
                 # Contexts for both viewport sizes
                 desktop_context = await browser.new_context(viewport={'width': 1440, 'height': 900})

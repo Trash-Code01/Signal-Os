@@ -304,7 +304,12 @@ def enrich_lead_contacts_task(business_id: int):
         if not business or not business.website_url:
             return {"status": "skipped", "reason": "Lead has no website"}
         
-        audit = asyncio.run(WebsiteIntelligenceEngine().audit_website(business.website_url))
+        try:
+            audit = asyncio.run(asyncio.wait_for(WebsiteIntelligenceEngine().audit_website(business.website_url), timeout=240.0))
+        except Exception as e:
+            print(f"Crawler timeout/error on refresh for {business.website_url}: {e}")
+            audit = {"social_profiles": [], "public_people": []}
+            
         social_count = _save_social_profiles(db, business, audit.get("social_profiles") or [])
         
         # 1. Save public people found on the website
@@ -506,7 +511,14 @@ def process_campaign_task(campaign_id: int):
                 db.commit()
                 continue
 
-            audit = asyncio.run(crawler.audit_website(business.website_url))
+            try:
+                audit = asyncio.run(asyncio.wait_for(crawler.audit_website(business.website_url), timeout=240.0))
+            except Exception as e:
+                print(f"Crawler timeout/error for {business.website_url}: {e}")
+                business.status = "rejected_unreachable"
+                db.commit()
+                continue
+
             _, evidence = _persist_website_research(db, business, audit)
             audited_count += 1
             if not audit.get("is_live"):
