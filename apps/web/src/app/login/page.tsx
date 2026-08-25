@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Terminal } from 'lucide-react';
@@ -75,7 +75,7 @@ export default function LoginPage() {
                 type="password"
                 required
                 className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors placeholder:text-zinc-600"
-                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                placeholder="••••••••"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
               />

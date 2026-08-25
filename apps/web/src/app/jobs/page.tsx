@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
@@ -26,8 +26,8 @@ const PIPELINE_STAGES: Stage[] = [
 ];
 
 function StatusIcon({ status }: { status: StageStatus }) {
-  if (status === 'done') return <span className="text-green-500 text-lg">âœ“</span>;
-  if (status === 'failed') return <span className="text-red-500 text-lg">âœ—</span>;
+  if (status === 'done') return <span className="text-green-500 text-lg">✓</span>;
+  if (status === 'failed') return <span className="text-red-500 text-lg">✔</span>;
   if (status === 'running') return <span className="w-4 h-4 border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] rounded-full animate-spin inline-block"></span>;
   return <span className="w-4 h-4 rounded-full border border-zinc-700 inline-block"></span>;
 }
@@ -108,7 +108,7 @@ function JobsContent() {
           <div>
             <h1 className="text-3xl font-bold text-white">Pipeline Monitor</h1>
             <p className="text-zinc-400 mt-1">
-              {campaignId ? `Campaign #${campaignId}` : 'No campaign selected'} â€” watching all stages
+              {campaignId ? `Campaign #${campaignId}` : 'No campaign selected'} "” watching all stages
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -180,7 +180,7 @@ function JobsContent() {
             <p className="text-zinc-400 text-sm mt-0.5">{stats.qualified} qualified leads are ready in your CRM</p>
           </div>
           <a href="/leads" className="bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-md text-sm font-medium transition">
-            View Leads â†’
+            View Leads →
           </a>
         </div>
       )}

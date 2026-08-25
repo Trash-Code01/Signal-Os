@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -102,7 +102,7 @@ export default function CampaignsPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-zinc-300">{c.target} leads</td>
-                      <td className="px-6 py-4 text-right text-zinc-500 group-hover:text-white transition">â†’</td>
+                      <td className="px-6 py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
                     </tr>
                   )) : (
                     <tr>

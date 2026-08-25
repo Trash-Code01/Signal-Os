@@ -366,12 +366,57 @@ def process_campaign_task(campaign_id: int):
         industry_raw = campaign.industry.name if campaign.industry else "Local business"
         # Map internal industry values to search-friendly Google Maps terms
         industry_map = {
-            "d2c": "ecommerce",
-            "wedding": "wedding photography",
-            "clinic": "clinic medical",
-            "real_estate": "real estate",
+            # Frontend industry values
+            "roofing": "roofing contractor",
+            "hvac": "HVAC company",
+            "cleaning": "cleaning service company",
+            "restaurant": "restaurant",
+            "clinic": "medical clinic",
+            "real_estate": "real estate agency",
+            "d2c": "ecommerce store",
+            "wedding": "wedding photographer",
+            # Extended industry values
+            "architecture": "architecture firm",
+            "architect": "architecture firm",
+            "agriculture": "agricultural business",
+            "farming": "farm supply company",
+            "construction": "construction company",
+            "plumbing": "plumbing contractor",
+            "electrical": "electrical contractor",
+            "landscaping": "landscaping company",
+            "law": "law firm",
+            "legal": "law firm",
+            "accounting": "accounting firm",
+            "dental": "dental clinic",
+            "dentist": "dentist",
+            "gym": "fitness gym",
+            "fitness": "fitness center",
+            "salon": "hair salon",
+            "spa": "day spa",
+            "hotel": "hotel",
+            "logistics": "logistics company",
+            "trucking": "trucking company",
+            "auto": "auto repair shop",
+            "car": "car dealership",
+            "insurance": "insurance agency",
+            "marketing": "marketing agency",
+            "software": "software company",
+            "tech": "technology company",
+            "printing": "printing company",
+            "photography": "photography studio",
+            "catering": "catering company",
+            "bakery": "bakery",
+            "flooring": "flooring company",
+            "painting": "painting contractor",
+            "pest": "pest control company",
+            "security": "security company",
+            "solar": "solar energy company",
+            "staffing": "staffing agency",
+            "travel": "travel agency",
+            "tutoring": "tutoring center",
+            "childcare": "daycare center",
         }
-        search_term = industry_map.get(industry_raw.lower(), industry_raw)
+        search_term = industry_map.get(industry_raw.lower(), industry_raw.replace("_", " "))
         industry_name = search_term
         quality_threshold = max(0, min(int(campaign.min_quality_score or 80), 100))
         target_quantity = max(1, int(campaign.target_quantity or 1))

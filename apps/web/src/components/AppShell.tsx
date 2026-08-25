@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import { usePathname } from 'next/navigation';
 import { Sidebar } from "@/components/Sidebar";
 import { MobileNav } from "@/components/MobileNav";
