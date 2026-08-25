@@ -186,7 +186,7 @@ export default function LeadDossier() {
                             <h3 className="text-base font-medium text-primary font-serif">{c.name || "Unknown"}</h3>
                             {c.verification_status === "verified" && <span className="text-xs text-[#4ade80]">Verified</span>}
                           </div>
-                          <p className="text-sm text-on-surface-variant flex items-center gap-2 mb-3">
+                          <p className="text-sm text-on-surface-variant flex items-center flex-wrap gap-2 mb-3">
                             {c.title || (c.contact_type === "company" ? "Website contact" : "Decision maker")}
                             {c.source && (
                               <>
@@ -195,24 +195,24 @@ export default function LeadDossier() {
                               </>
                             )}
                             {c.source_url && (
-                              <a className="text-xs text-primary/80 hover:text-primary flex items-center gap-1 ml-1" href={c.source_url} target="_blank" rel="noreferrer">
+                              <a className="text-xs text-primary/80 hover:text-primary flex items-center shrink-0 gap-1 ml-1" href={c.source_url} target="_blank" rel="noreferrer">
                                 <span className="material-symbols-outlined text-[12px]">open_in_new</span> Evidence
                               </a>
                             )}
                           </p>
-                          <div className="space-y-2 mt-4 pt-4 border-t border-outline-variant/20 font-serif">
+                          <div className="space-y-2 mt-4 pt-4 border-t border-outline-variant/20 font-serif w-full">
                             <div className="flex items-center gap-3 text-sm">
-                              <span className={`material-symbols-outlined text-[16px] ${c.email ? "text-[#4ade80]" : "text-outline"}`}>mail</span>
-                              <span className={c.email ? "text-[#4ade80]" : "text-outline italic"}>{c.email || "Email not found"}</span>
+                              <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.email ? "text-[#4ade80]" : "text-outline"}`}>mail</span>
+                              <span className={c.email ? "text-[#4ade80] break-all" : "text-outline italic"}>{c.email || "Email not found"}</span>
                             </div>
                             <div className="flex items-center gap-3 text-sm">
-                              <span className={`material-symbols-outlined text-[16px] ${c.phone ? "text-[#4ade80]" : "text-outline"}`}>phone</span>
-                              <span className={c.phone ? "text-[#4ade80]" : "text-outline italic"}>{c.phone || "Phone not found"}</span>
+                              <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.phone ? "text-[#4ade80]" : "text-outline"}`}>phone</span>
+                              <span className={c.phone ? "text-[#4ade80] break-words" : "text-outline italic"}>{c.phone || "Phone not found"}</span>
                             </div>
                             <div className="flex items-center gap-3 text-sm">
-                              <span className={`material-symbols-outlined text-[16px] ${c.linkedin_url ? "text-[#4ade80]" : "text-outline"}`}>work</span>
+                              <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.linkedin_url ? "text-[#4ade80]" : "text-outline"}`}>work</span>
                               {c.linkedin_url ? (
-                                <a href={c.linkedin_url} target="_blank" rel="noreferrer" className="text-[#4ade80] hover:underline">LinkedIn</a>
+                                <a href={c.linkedin_url} target="_blank" rel="noreferrer" className="text-[#4ade80] hover:underline break-all">LinkedIn</a>
                               ) : (
                                 <span className="text-outline italic">LinkedIn not found</span>
                               )}
