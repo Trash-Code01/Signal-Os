@@ -169,23 +169,36 @@ export default function NewCampaignPage() {
               <span className="w-6 h-6 rounded bg-[#8b5cf6]/20 text-[#a78bfa] text-xs flex items-center justify-center">2</span>
               Industry & Vertical
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
-              {INDUSTRIES.map(ind => (
-                <button
-                  key={ind.value}
-                  onClick={() => setForm({ ...form, industry: ind.value, sub_industry: '' })}
-                  className={`text-left p-4 rounded-xl border transition active:scale-[0.98] ${
-                    form.industry === ind.value
-                      ? 'border-[#8b5cf6]/60 bg-[#8b5cf6]/10 text-white'
-                      : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-white bg-[#09090b]'
-                  }`}
-                >
-                  <span className="font-medium text-sm block">{ind.label}</span>
-                  <p className="text-xs text-zinc-600 mt-1">{ind.sub.slice(0, 2).join(', ')}</p>
-                </button>
-              ))}
+            <div className="mb-5">
+              <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Custom Industry / Niche</label>
+              <input
+                type="text"
+                value={form.industry}
+                onChange={e => setForm({ ...form, industry: e.target.value, sub_industry: '' })}
+                placeholder="e.g. Architecture Firm, Solar Panel Installer, Agriculture..."
+                className="w-full bg-[#09090b] border border-zinc-800 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-[#8b5cf6]/50 focus:ring-1 focus:ring-[#8b5cf6]/50 placeholder:text-zinc-600 mb-4"
+              />
+              
+              <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Or choose a quick preset:</label>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {INDUSTRIES.map(ind => (
+                  <button
+                    key={ind.value}
+                    onClick={() => setForm({ ...form, industry: ind.value, sub_industry: '' })}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition active:scale-[0.98] ${
+                      form.industry === ind.value
+                        ? 'border-[#8b5cf6]/60 bg-[#8b5cf6]/10 text-white'
+                        : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-white bg-[#09090b]'
+                    }`}
+                  >
+                    {ind.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            {selectedIndustry && (
+            
+            {/* Show Sub-industry only if they clicked a preset that has subs */}
+            {selectedIndustry && selectedIndustry.sub && (
               <div className="pt-2 border-t border-zinc-800/60 mt-4">
                 <label className="text-xs text-zinc-400 uppercase tracking-wider mb-3 block mt-4">Sub-Industry (optional)</label>
                 <div className="flex flex-wrap gap-2">
