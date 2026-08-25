@@ -177,6 +177,22 @@ class CampaignCreateRequest(BaseModel):
     industry: str
     target_quantity: int
     min_quality_score: int
+@app.get("/api/sync-sequences")
+def sync_sequences(db: Session = Depends(get_db)):
+    from sqlalchemy import text
+    tables = [
+        "industry_configs", "campaigns", "campaign_locations", 
+        "provider_accounts", "job_runs", "businesses", 
+        "business_sources", "decision_makers", "scores", 
+        "opportunities", "crm_leads", "crm_activities"
+    ]
+    for table in tables:
+        try:
+            db.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), coalesce(max(id), 1), max(id) IS NOT null) FROM {table};"))
+        except Exception as e:
+            print(f"Failed on {table}: {e}")
+    db.commit()
+    return {"status": "synced"}
 
 @app.post("/api/campaigns")
 def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db)):
