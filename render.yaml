@@ -1,15 +1,13 @@
 ﻿services:
   # 1. FastAPI + Celery Backend (Docker)
   - type: web
-    name: devacia-api
+    name: devacia-backend
     env: docker
     rootDir: apps/api
     plan: free
     region: ohio
     dockerCommand: "bash start.sh"
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.9"
       - key: DATABASE_URL
         fromDatabase:
           name: devacia-db
@@ -40,7 +38,7 @@
 
   # 2. Next.js Frontend (Docker)
   - type: web
-    name: devacia-web
+    name: devacia-frontend
     env: docker
     rootDir: apps/web
     plan: free
@@ -49,7 +47,7 @@
       - key: NEXT_PUBLIC_API_URL
         fromService:
           type: web
-          name: devacia-api
+          name: devacia-backend
           envVarKey: RENDER_EXTERNAL_URL
 
   # 3. Redis Memory Cache
