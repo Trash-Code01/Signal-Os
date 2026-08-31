@@ -60,17 +60,24 @@ Collected Evidence:
 Analyze this business and return a complete AI SDR dossier in JSON format mapping perfectly to the Opportunity schema.
 """
 
-        try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema=AISDROutput,
+        for attempt in range(3):
+            try:
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json",
+                        response_schema=AISDROutput,
+                    )
                 )
-            )
-            result_json = json.loads(response.text)
-            return AISDROutput.model_validate(result_json).model_dump()
+                result_json = json.loads(response.text)
+                return AISDROutput.model_validate(result_json).model_dump()
 
-        except Exception as e:
-            print(f"Gemini API error: {e}")
-            return None
+            except Exception as e:
+                print(f"Gemini API error (Attempt {attempt+1}): {e}")
+                if attempt < 2 and "429" in str(e) or "ResourceExhausted" in str(e) or "rate limit" in str(e).lower():
+                    import asyncio
+                    print("Gemini rate limited. Waiting 15 seconds before retry...")
+                    await asyncio.sleep(15)
+                else:
+                    return None
+        return None

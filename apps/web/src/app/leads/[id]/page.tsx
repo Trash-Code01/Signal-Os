@@ -11,6 +11,19 @@ export default function LeadDossier() {
   const router = useRouter();
   const [lead, setLead] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isGeneratingEmail, setIsGeneratingEmail] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+
+  const handleCopy = async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
 
   useEffect(() => {
     async function fetchLead() {
@@ -47,6 +60,32 @@ export default function LeadDossier() {
     );
   }
 
+  const handleGenerateEmail = async () => {
+    setIsGeneratingEmail(true);
+    setEmailError(null);
+    try {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const res = await fetch(`${apiUrl}/api/leads/${id}/generate-email`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const refreshRes = await fetch(`${apiUrl}/api/crm/leads/${id}`);
+        if (refreshRes.ok) {
+          setLead(await refreshRes.json());
+        }
+      } else {
+        setEmailError("Failed to generate email");
+      }
+    } catch (e) {
+      setEmailError("Error connecting to server");
+    } finally {
+      setIsGeneratingEmail(false);
+    }
+  };
+
+  const generatedEmailActivity = (lead.activities || []).find((a: any) => a.type === "generated_email");
+  const generatedEmail = generatedEmailActivity ? generatedEmailActivity.body : null;
+
   const websiteHref = lead.website_url
     ? lead.website_url.startsWith("http")
       ? lead.website_url
@@ -61,6 +100,100 @@ export default function LeadDossier() {
   const outreachAngle = lead.outreach_angle || "Personalized opener has not been generated yet.";
   const evidenceSummary = detail.evidence_summary || "Crawl data and audit findings will appear here after research completes.";
   const socialProfiles = lead.social_profiles || [];
+
+  const renderContactCard = (c: any, idx: number, sourcePrefix: string) => {
+    let sourceLabel = c.source || "unknown";
+    let sourceIcon = "person";
+    if (sourceLabel.includes("website")) {
+      sourceLabel = "Website Crawl";
+      sourceIcon = "language";
+    } else if (sourceLabel.includes("snovio")) {
+      sourceLabel = "Snov.io";
+      sourceIcon = "radar";
+    } else if (sourceLabel.includes("proxycurl")) {
+      sourceLabel = "Proxycurl Executives";
+      sourceIcon = "manage_search";
+    } else if (sourceLabel.includes("hunter")) {
+      sourceLabel = "Hunter.io";
+      sourceIcon = "find_in_page";
+    } else if (sourceLabel.includes("serper")) {
+      sourceLabel = "Google Maps";
+      sourceIcon = "location_on";
+    } else {
+      sourceLabel = sourceLabel.replace(/_/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase());
+    }
+
+    return (
+      <div key={`${sourcePrefix}-${idx}`} className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 p-5 hover:border-outline-variant transition-colors relative group/card">
+        <button className="absolute top-4 right-4 text-outline hover:text-primary opacity-0 group-hover/card:opacity-100 transition-opacity">
+          <span className="material-symbols-outlined text-[18px]">edit</span>
+        </button>
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary font-medium border border-outline-variant/50 shrink-0">
+            {c.name ? c.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2).toUpperCase() : "?"}
+          </div>
+          <div className="w-full min-w-0">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-base font-medium text-primary font-serif truncate pr-2">{c.name || "Unknown"}</h3>
+              {c.verification_status === "verified" && <span className="text-xs text-[#4ade80] shrink-0">Verified</span>}
+            </div>
+            <p className="text-sm text-on-surface-variant flex items-center flex-wrap gap-2 mb-3">
+              <span className="truncate">{c.title || (c.contact_type === "company" ? "Website contact" : "Decision maker")}</span>
+              {c.source && (
+                <>
+                  <span className="text-outline shrink-0">|</span>
+                  <span className="text-xs bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 flex items-center gap-1 shrink-0">
+                    <span className="material-symbols-outlined text-[12px]">{sourceIcon}</span>
+                    {sourceLabel}
+                  </span>
+                </>
+              )}
+              {c.source_url && (
+                <a className="text-xs text-primary/80 hover:text-primary flex items-center shrink-0 gap-1 ml-1" href={c.source_url} target="_blank" rel="noreferrer">
+                  <span className="material-symbols-outlined text-[12px]">open_in_new</span> Evidence
+                </a>
+              )}
+            </p>
+            
+            <div className="space-y-2 mt-4 pt-4 border-t border-outline-variant/20 font-serif w-full">
+              <div 
+                className={`flex items-center gap-3 text-sm ${c.email ? "cursor-pointer hover:opacity-80 active:scale-[0.98] transition-all" : ""}`}
+                onClick={() => c.email && handleCopy(c.email, `${sourcePrefix}-email-${idx}`)}
+                title={c.email ? "Click to copy" : ""}
+              >
+                <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.email ? "text-[#4ade80]" : "text-outline"}`}>mail</span>
+                <span className={c.email ? "text-[#4ade80] break-all" : "text-outline italic"}>
+                  {copiedId === `${sourcePrefix}-email-${idx}` ? "Copied!" : (c.email || "Email not found")}
+                </span>
+              </div>
+              <div 
+                className={`flex items-center gap-3 text-sm ${c.phone ? "cursor-pointer hover:opacity-80 active:scale-[0.98] transition-all" : ""}`}
+                onClick={() => c.phone && handleCopy(c.phone, `${sourcePrefix}-phone-${idx}`)}
+                title={c.phone ? "Click to copy" : ""}
+              >
+                <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.phone ? "text-[#4ade80]" : "text-outline"}`}>phone</span>
+                <span className={c.phone ? "text-[#4ade80] break-words" : "text-outline italic"}>
+                  {copiedId === `${sourcePrefix}-phone-${idx}` ? "Copied!" : (c.phone || "Phone not found")}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-sm">
+                <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.linkedin_url ? "text-[#4ade80]" : "text-outline"}`}>work</span>
+                {c.linkedin_url ? (
+                  <a href={c.linkedin_url} target="_blank" rel="noreferrer" className="text-[#4ade80] hover:underline break-all">LinkedIn</a>
+                ) : (
+                  <span className="text-outline italic">LinkedIn not found</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const websiteContacts = (lead.contacts || []).filter((c: any) => !c.source?.includes("snovio") && !c.source?.includes("proxycurl") && !c.source?.includes("apollo"));
+  const snovioContacts = (lead.contacts || []).filter((c: any) => c.source?.includes("snovio"));
+  const proxycurlContacts = (lead.contacts || []).filter((c: any) => c.source?.includes("proxycurl"));
 
   return (
     <div className="lead-dossier-page min-h-screen bg-[#141313] text-on-surface text-sm flex flex-col animate-in fade-in duration-500">
@@ -161,108 +294,108 @@ export default function LeadDossier() {
           {/* Editable Content Blocks */}
           <div className="space-y-12">
             {/* Section: Decision Makers */}
-            <section className="group">
-              <div className="flex items-center justify-between mb-4 border-b border-outline-variant/20 pb-2">
-                <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[16px]">manage_accounts</span> Decision Makers & Contact Data
-                </h2>
-                <button className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2 py-1 rounded transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[14px]">refresh</span> Refresh contact research
-                </button>
-              </div>
-              <div className="grid grid-cols-1 gap-4">
-                {lead.contacts && lead.contacts.length > 0 ? (
-                  lead.contacts.map((c: any, idx: number) => {
-                    // Format source nicely
-                    let sourceLabel = c.source || "unknown";
-                    let sourceIcon = "person";
-                    if (sourceLabel.includes("website")) {
-                      sourceLabel = "Website Crawl";
-                      sourceIcon = "language";
-                    } else if (sourceLabel.includes("apollo")) {
-                      sourceLabel = "Apollo";
-                      sourceIcon = "rocket_launch";
-                    } else if (sourceLabel.includes("hunter")) {
-                      sourceLabel = "Hunter.io";
-                      sourceIcon = "track_changes";
-                    } else if (sourceLabel.includes("serper")) {
-                      sourceLabel = "Google Maps";
-                      sourceIcon = "location_on";
-                    } else {
-                      sourceLabel = sourceLabel.replace(/_/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase());
-                    }
+                          <section className="group">
+                <div className="flex items-center justify-between mb-4 border-b border-outline-variant/20 pb-2">
+                  <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[16px]">manage_accounts</span> Website & General Contacts
+                  </h2>
+                  <button className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2 py-1 rounded transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px]">refresh</span> Refresh contact research
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 gap-4">
+                  {websiteContacts.length > 0 ? (
+                    websiteContacts.map((c: any, idx: number) => renderContactCard(c, idx, "web"))
+                  ) : (
+                    <div className="text-sm text-on-surface-variant italic py-4">No general contacts captured.</div>
+                  )}
+                </div>
 
-                    return (
-                    <div key={idx} className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 p-5 hover:border-outline-variant transition-colors relative group/card">
-                      <button className="absolute top-4 right-4 text-outline hover:text-primary opacity-0 group-hover/card:opacity-100 transition-opacity">
-                        <span className="material-symbols-outlined text-[18px]">edit</span>
-                      </button>
-                      <div className="flex items-start gap-4">
-                        <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary font-medium border border-outline-variant/50">
-                          {c.name ? c.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2).toUpperCase() : "?"}
-                        </div>
-                        <div className="w-full">
-                          <div className="flex items-center justify-between mb-1">
-                            <h3 className="text-base font-medium text-primary font-serif">{c.name || "Unknown"}</h3>
-                            {c.verification_status === "verified" && <span className="text-xs text-[#4ade80]">Verified</span>}
-                          </div>
-                          <p className="text-sm text-on-surface-variant flex items-center flex-wrap gap-2 mb-3">
-                            {c.title || (c.contact_type === "company" ? "Website contact" : "Decision maker")}
-                            {c.source && (
-                              <>
-                                <span className="text-outline">|</span>
-                                <span className="text-xs bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 flex items-center gap-1">
-                                  <span className="material-symbols-outlined text-[12px]">{sourceIcon}</span>
-                                  {sourceLabel}
-                                </span>
-                              </>
-                            )}
-                            {c.source_url && (
-                              <a className="text-xs text-primary/80 hover:text-primary flex items-center shrink-0 gap-1 ml-1" href={c.source_url} target="_blank" rel="noreferrer">
-                                <span className="material-symbols-outlined text-[12px]">open_in_new</span> Evidence
-                              </a>
-                            )}
-                          </p>
-                          <div className="space-y-2 mt-4 pt-4 border-t border-outline-variant/20 font-serif w-full">
-                            <div className="flex items-center gap-3 text-sm">
-                              <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.email ? "text-[#4ade80]" : "text-outline"}`}>mail</span>
-                              <span className={c.email ? "text-[#4ade80] break-all" : "text-outline italic"}>{c.email || "Email not found"}</span>
-                            </div>
-                            <div className="flex items-center gap-3 text-sm">
-                              <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.phone ? "text-[#4ade80]" : "text-outline"}`}>phone</span>
-                              <span className={c.phone ? "text-[#4ade80] break-words" : "text-outline italic"}>{c.phone || "Phone not found"}</span>
-                            </div>
-                            <div className="flex items-center gap-3 text-sm">
-                              <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.linkedin_url ? "text-[#4ade80]" : "text-outline"}`}>work</span>
-                              {c.linkedin_url ? (
-                                <a href={c.linkedin_url} target="_blank" rel="noreferrer" className="text-[#4ade80] hover:underline break-all">LinkedIn</a>
-                              ) : (
-                                <span className="text-outline italic">LinkedIn not found</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
+                <div className="mt-8">
+                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[14px]">radar</span> SNOV.IO ENRICHMENT
+                  </h3>
+                  <div className="grid grid-cols-1 gap-4">
+                    {snovioContacts.length > 0 ? (
+                      snovioContacts.map((c: any, idx: number) => renderContactCard(c, idx, "snovio"))
+                    ) : (
+                      <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
+                        <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
+                        <span className="text-sm text-on-surface-variant font-medium">Snov.io search yielded no results.</span>
+                        <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
                       </div>
-                    </div>
-                    );
-                  })
-                ) : (
-                  <div className="text-sm text-on-surface-variant italic py-4">No decision makers captured yet.</div>
-                )}
-              </div>
-            </section>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-8">
+                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider mb-3 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[14px]">manage_search</span> PROXYCURL ENRICHMENT
+                  </h3>
+                  <div className="grid grid-cols-1 gap-4">
+                    {proxycurlContacts.length > 0 ? (
+                      proxycurlContacts.map((c: any, idx: number) => renderContactCard(c, idx, "proxycurl"))
+                    ) : (
+                      <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
+                        <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
+                        <span className="text-sm text-on-surface-variant font-medium">Proxycurl search yielded no results.</span>
+                        <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
 
             {/* Section: Outreach Intelligence */}
-            <section className="group">
-              <div className="flex items-center justify-between mb-4 border-b border-outline-variant/20 pb-2">
-                <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[16px]">psychology</span> AI Outreach Angle
-                </h2>
-              </div>
-              <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 p-5">
-                <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap font-serif">{outreachAngle}</p>
-              </div>
-            </section>
+                          <section className="group">
+                <div className="flex items-center justify-between mb-4 border-b border-outline-variant/20 pb-2">
+                  <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[16px]">psychology</span> AI Outreach Angle
+                  </h2>
+                </div>
+                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 p-5">
+                  <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap font-serif">{outreachAngle}</p>
+                  
+                  <div className="mt-6 pt-6 border-t border-outline-variant/20">
+                    <button 
+                      onClick={handleGenerateEmail} 
+                      disabled={isGeneratingEmail}
+                      className="bg-primary text-[#141313] hover:bg-primary/90 px-4 py-2 rounded-lg text-xs font-semibold tracking-wider flex items-center gap-2 transition-colors disabled:opacity-50 uppercase shadow-sm active:scale-95"
+                    >
+                      <span className="material-symbols-outlined text-[16px]" style={{ fontVariationSettings: '"FILL" 1' }}>
+                        {isGeneratingEmail ? "hourglass_empty" : "auto_awesome"}
+                      </span>
+                      {isGeneratingEmail ? "Generating top-tier email..." : "Generate Personalised Outreach Email"}
+                    </button>
+
+                    {emailError && (
+                      <p className="text-red-400 text-xs mt-2 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[14px]">error</span> {emailError}
+                      </p>
+                    )}
+
+                    {generatedEmail && (
+                      <div className="mt-6">
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-[11px] font-semibold text-[#4ade80] uppercase tracking-widest flex items-center gap-2">
+                            <span className="material-symbols-outlined text-[16px]">auto_awesome</span> AI-GENERATED OUTREACH EMAIL
+                          </h3>
+                          <button 
+                            onClick={() => handleCopy(generatedEmail, "generated_email")}
+                            className="text-xs text-outline hover:text-[#4ade80] border border-outline-variant/40 px-3 py-1.5 rounded transition-all flex items-center gap-1 active:scale-95 bg-surface-container-low hover:bg-surface-container"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">{copiedId === "generated_email" ? "check" : "content_copy"}</span> 
+                            {copiedId === "generated_email" ? "Copied!" : "Copy"}
+                          </button>
+                        </div>
+                        <div className="bg-[#1a1919] border border-outline-variant/20 rounded-lg p-5">
+                          <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap font-serif">{generatedEmail}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
 
             {/* Section: Devacia Opportunity */}
             <section className="group">

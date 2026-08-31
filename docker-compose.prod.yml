@@ -5,6 +5,8 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: devacia_prod_postgres
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: devacia
       POSTGRES_PASSWORD: devacia_password
@@ -19,6 +21,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: devacia_prod_redis
+    ports:
+      - "6379:6379"
     volumes:
       - redis_prod_data:/data
     restart: always
@@ -33,6 +37,7 @@ services:
     container_name: devacia_prod_api
     env_file:
       - ./apps/api/.env
+      - ./apps/api/.env.local
     environment:
       - DATABASE_URL=postgresql+psycopg://devacia:devacia_password@postgres:5432/devacia_os
       - REDIS_URL=redis://redis:6379/0
@@ -53,6 +58,7 @@ services:
     container_name: devacia_prod_worker
     env_file:
       - ./apps/api/.env
+      - ./apps/api/.env.local
     environment:
       - DATABASE_URL=postgresql+psycopg://devacia:devacia_password@postgres:5432/devacia_os
       - REDIS_URL=redis://redis:6379/0

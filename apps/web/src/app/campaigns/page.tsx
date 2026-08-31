@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FiSearch, FiArchive, FiPlus } from 'react-icons/fi';
+import { FiSearch, FiArchive, FiPlus, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import { ChevronRight } from 'lucide-react';
 
 export default function CampaignsPage() {
@@ -10,34 +10,79 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [statusTab, setStatusTab] = useState("active");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+
+  const fetchCampaigns = async () => {
+    setLoading(true);
+    try {
+      const apiUrl = "";
+      const res = await fetch(`${apiUrl}/api/campaigns?status=${statusTab}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCampaigns(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+      setSelectedIds([]);
+    }
+  };
 
   useEffect(() => {
-    async function fetchCampaigns() {
-      try {
-        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
-        const res = await fetch(`${apiUrl}/api/campaigns`);
-        if (res.ok) {
-          const data = await res.json();
-          setCampaigns(data);
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    }
     fetchCampaigns();
-  }, []);
+  }, [statusTab]);
 
   const filteredCampaigns = campaigns.filter(c => 
     c.name.toLowerCase().includes(search.toLowerCase())
   );
 
+  const toggleSelection = (id: number) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleAll = () => {
+    if (selectedIds.length === filteredCampaigns.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredCampaigns.map(c => c.id));
+    }
+  };
+
+  const handleBulkAction = async (action: 'delete' | 'recover' | 'permanent') => {
+    if (!selectedIds.length) return;
+    const apiUrl = "";
+    
+    let endpoint = '/api/campaigns';
+    let method = 'DELETE';
+    
+    if (action === 'recover') {
+      endpoint = '/api/campaigns/recover';
+      method = 'POST';
+    } else if (action === 'permanent') {
+      if (!confirm("Are you sure you want to permanently delete these campaigns? This cannot be undone.")) return;
+      endpoint = '/api/campaigns/permanent';
+      method = 'DELETE';
+    }
+
+    try {
+      await fetch(`${apiUrl}${endpoint}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedIds })
+      });
+      fetchCampaigns();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   return (
-    <div className="p-4 md:p-10 max-w-[1400px] pb-24 md:pb-10 w-full mx-auto">
+    <div className="p-4 md:p-10 max-w-[1400px] pb-32 md:pb-32 w-full mx-auto">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 md:mb-10 gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-white mb-1 md:mb-2 tracking-tight">All Campaigns</h1>
+          <h1 className="text-2xl md:text-3xl font-bold text-white mb-1 md:mb-2 tracking-tight">Campaigns</h1>
           <p className="text-sm md:text-base text-zinc-400">Manage your active and past intelligence pipelines.</p>
         </div>
         <button 
@@ -45,6 +90,21 @@ export default function CampaignsPage() {
           className="hidden md:flex items-center gap-2 bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-4 py-2 rounded-md text-sm font-medium transition whitespace-nowrap"
         >
           <FiPlus /> New campaign
+        </button>
+      </div>
+
+      <div className="flex gap-4 border-b border-zinc-800 mb-6">
+        <button 
+          onClick={() => setStatusTab('active')} 
+          className={`pb-2 px-2 text-sm font-medium transition ${statusTab === 'active' ? 'text-purple-400 border-b-2 border-purple-500' : 'text-zinc-500 hover:text-zinc-300'}`}
+        >
+          Active
+        </button>
+        <button 
+          onClick={() => setStatusTab('trash')} 
+          className={`pb-2 px-2 text-sm font-medium transition flex items-center gap-2 ${statusTab === 'trash' ? 'text-purple-400 border-b-2 border-purple-500' : 'text-zinc-500 hover:text-zinc-300'}`}
+        >
+          Trash Bin
         </button>
       </div>
 
@@ -69,45 +129,65 @@ export default function CampaignsPage() {
             {/* Desktop Table Layout */}
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="text-xs text-zinc-500 uppercase tracking-wider border-b border-zinc-800/60 bg-zinc-900/20">
+                <thead className="text-xs text-zinc-500 bg-zinc-900/30 uppercase tracking-wider border-b border-zinc-800">
+                  <tr>
+                    <th className="px-6 py-4 w-12">
+                      <input 
+                        type="checkbox" 
+                        checked={filteredCampaigns.length > 0 && selectedIds.length === filteredCampaigns.length}
+                        onChange={toggleAll}
+                        className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700" 
+                      />
+                    </th>
                     <th className="px-6 py-4 font-medium">Campaign Name</th>
-                    <th className="px-6 py-4 font-medium">Location</th>
+                    <th className="px-6 py-4 font-medium">Target Geo</th>
                     <th className="px-6 py-4 font-medium">Industry</th>
-                    <th className="px-6 py-4 font-medium">Status</th>
-                    <th className="px-6 py-4 font-medium">Target</th>
-                    <th className="px-6 py-4 font-medium text-right">View Leads</th>
+                    <th className="px-6 py-4 font-medium text-right">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800/60">
-                  {filteredCampaigns.length > 0 ? filteredCampaigns.map((c: any) => (
-                    <tr 
-                      key={c.id} 
-                      className="hover:bg-zinc-800/20 transition group cursor-pointer" 
-                      onClick={() => router.push(`/leads?campaignId=${c.id}`)}
-                    >
-                      <td className="px-6 py-4 text-white font-medium flex items-center gap-3">
-                        <FiArchive className="text-purple-500" />
-                        {c.name}
-                      </td>
-                      <td className="px-6 py-4 text-zinc-400">{c.city}, {c.country}</td>
-                      <td className="px-6 py-4"><span className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs px-3 py-1 rounded-full">{c.industry}</span></td>
+                <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
+                  {filteredCampaigns.map(c => (
+                    <tr key={c.id} className={`hover:bg-zinc-800/20 transition group ${selectedIds.includes(c.id) ? 'bg-purple-500/5' : ''}`}>
                       <td className="px-6 py-4">
-                        <span className={`px-2 py-1 rounded text-xs font-bold ${
-                          c.status === 'completed' ? 'text-green-500 bg-green-500/10' :
-                          c.status === 'running' ? 'text-blue-500 bg-blue-500/10' :
-                          'text-zinc-400 bg-zinc-800'
+                        <input 
+                          type="checkbox" 
+                          checked={selectedIds.includes(c.id)}
+                          onChange={() => toggleSelection(c.id)}
+                          className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700" 
+                        />
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push(`/leads?campaignId=${c.id}`)}>
+                          <div className="w-8 h-8 rounded-full bg-[#8b5cf6]/20 flex items-center justify-center">
+                            <FiArchive className="text-[#a78bfa] w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="font-medium text-white group-hover:text-[#a78bfa] transition">{c.name}</div>
+                            <div className="text-xs text-zinc-500">{new Date(c.created_at).toLocaleDateString()}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-zinc-400">
+                        {c.city}, {c.country}
+                      </td>
+                      <td className="px-6 py-4 text-zinc-400 capitalize">
+                        {c.industry || 'Any'}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-medium uppercase tracking-wider ${
+                          c.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 
+                          c.status === 'running' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                          'bg-zinc-800 text-zinc-400 border border-zinc-700'
                         }`}>
-                          {c.status.toUpperCase()}
+                          {statusTab === 'trash' ? 'Deleted' : c.status}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-zinc-300">{c.target} leads</td>
-                      <td className="px-6 py-4 text-right text-zinc-500 group-hover:text-white transition">→</td>
                     </tr>
-                  )) : (
+                  ))}
+                  {filteredCampaigns.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-10 text-center text-zinc-500">
-                        No campaigns found matching "{search}".
+                      <td colSpan={5} className="px-6 py-12 text-center text-zinc-500">
+                        No campaigns found in this view.
                       </td>
                     </tr>
                   )}
@@ -115,53 +195,78 @@ export default function CampaignsPage() {
               </table>
             </div>
 
-            {/* Mobile Cards Layout */}
-            <div className="md:hidden flex flex-col gap-3">
-              {filteredCampaigns.length > 0 ? filteredCampaigns.map((c: any) => (
-                <div 
-                  key={c.id} 
-                  onClick={() => router.push(`/leads?campaignId=${c.id}`)}
-                  className="bg-[#121214] border border-zinc-800/60 p-4 rounded-xl cursor-pointer active:scale-[0.98] transition-all hover:border-zinc-700"
-                >
-                  <div className="flex justify-between items-start mb-3">
-                    <div className="flex items-center gap-2">
-                      <FiArchive className="text-purple-500 shrink-0" />
-                      <h3 className="font-bold text-white text-base leading-tight">{c.name}</h3>
-                    </div>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider shrink-0 ${
-                      c.status === 'completed' ? 'text-green-400 bg-green-900/30' :
-                      c.status === 'running' ? 'text-blue-400 bg-blue-900/30' :
-                      'text-zinc-400 bg-zinc-800'
-                    }`}>
-                      {c.status.toUpperCase()}
-                    </span>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-y-2 mb-4">
-                    <div>
-                      <p className="text-[10px] text-zinc-500 uppercase font-semibold">Location</p>
-                      <p className="text-sm text-zinc-300 truncate pr-2">{c.city}, {c.country}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-zinc-500 uppercase font-semibold">Industry</p>
-                      <p className="text-sm text-zinc-300 capitalize truncate">{c.industry}</p>
+            {/* Mobile List Layout */}
+            <div className="md:hidden divide-y divide-zinc-800/60">
+              {filteredCampaigns.map(c => (
+                <div key={c.id} className={`p-4 ${selectedIds.includes(c.id) ? 'bg-purple-500/5' : ''}`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <input 
+                      type="checkbox" 
+                      checked={selectedIds.includes(c.id)}
+                      onChange={() => toggleSelection(c.id)}
+                      className="accent-purple-500 w-5 h-5 rounded bg-zinc-800 border-zinc-700" 
+                    />
+                    <div className="flex-1 cursor-pointer" onClick={() => router.push(`/leads?campaignId=${c.id}`)}>
+                      <div className="font-medium text-white line-clamp-1">{c.name}</div>
+                      <div className="text-xs text-zinc-500">{new Date(c.created_at).toLocaleDateString()}</div>
                     </div>
                   </div>
-                  
-                  <div className="flex justify-between items-center pt-3 border-t border-zinc-800/60">
-                    <span className="text-xs text-zinc-400"><span className="text-white font-medium">{c.target}</span> leads target</span>
-                    <span className="text-xs text-purple-400 flex items-center gap-1 font-medium">View leads <ChevronRight className="w-3 h-3" /></span>
+                  <div className="pl-8 text-xs text-zinc-400">
+                    <span className="block mb-1">{c.city}, {c.country}</span>
+                    <span className="block">{c.industry || 'Any'}</span>
                   </div>
                 </div>
-              )) : (
-                <div className="py-10 text-center text-zinc-500 bg-[#121214] rounded-xl border border-dashed border-zinc-800">
-                  No campaigns found matching "{search}".
+              ))}
+              {filteredCampaigns.length === 0 && (
+                <div className="p-8 text-center text-zinc-500 text-sm">
+                  No campaigns found.
                 </div>
               )}
             </div>
           </>
         )}
       </div>
+
+      {/* Floating Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-5">
+          <div className="bg-[#18181b] border border-zinc-700 shadow-2xl rounded-full px-6 py-3 flex items-center gap-6 text-sm">
+            <span className="text-white font-medium">
+              <span className="text-purple-400">{selectedIds.length}</span> selected
+            </span>
+            <div className="w-px h-6 bg-zinc-700"></div>
+            {statusTab === 'active' ? (
+              <button 
+                onClick={() => handleBulkAction('delete')}
+                className="flex items-center gap-2 text-red-400 hover:text-red-300 font-medium transition"
+              >
+                <FiTrash2 /> Move to Trash
+              </button>
+            ) : (
+              <div className="flex items-center gap-4">
+                <button 
+                  onClick={() => handleBulkAction('recover')}
+                  className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 font-medium transition"
+                >
+                  <FiRotateCcw /> Recover
+                </button>
+                <button 
+                  onClick={() => handleBulkAction('permanent')}
+                  className="flex items-center gap-2 text-red-500 hover:text-red-400 font-medium transition"
+                >
+                  <FiAlertTriangle /> Delete Permanently
+                </button>
+              </div>
+            )}
+            <button 
+              onClick={() => setSelectedIds([])}
+              className="ml-4 text-zinc-500 hover:text-zinc-300 transition"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

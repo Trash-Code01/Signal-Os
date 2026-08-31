@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
     
     // Call the FastAPI login endpoint
     const response = await fetch(`${apiUrl}/api/auth/login`, {

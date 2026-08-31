@@ -13,7 +13,7 @@ export default function SettingsPage() {
     e.preventDefault();
     setEmailStatus({ loading: true, error: '', success: '' });
     try {
-      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/auth/update-email', {
+      const res = await fetch("" + '/api/auth/update-email', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_password: emailForm.currentPassword, new_email: emailForm.newEmail })
@@ -38,7 +38,7 @@ export default function SettingsPage() {
     }
     
     try {
-      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/auth/update-password', {
+      const res = await fetch("" + '/api/auth/update-password', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_password: passForm.currentPassword, new_password: passForm.newPassword })

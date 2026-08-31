@@ -47,6 +47,7 @@ class ProviderAccount(Base):
 class Campaign(Base):
     __tablename__ = "campaigns"
     id = Column(Integer, primary_key=True, index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     industry_id = Column(Integer, ForeignKey("industry_configs.id"))
     target_quantity = Column(Integer, default=100)
@@ -87,6 +88,7 @@ class JobRun(Base):
 class Business(Base):
     __tablename__ = "businesses"
     id = Column(Integer, primary_key=True, index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     campaign_id = Column(Integer, ForeignKey("campaigns.id"))
     name = Column(String(255), nullable=False)
     normalized_name = Column(String(255))
@@ -296,6 +298,7 @@ class CRMLead(Base):
     """Workspace-specific CRM state for a discovered or imported business."""
     __tablename__ = "crm_leads"
     id = Column(Integer, primary_key=True, index=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False, unique=True, index=True)
     stage = Column(String(50), nullable=False, default="new", index=True)
     owner_name = Column(String(255))

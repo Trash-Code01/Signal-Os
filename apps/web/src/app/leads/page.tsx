@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw , PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 type Filters = {
   q: string;
@@ -36,7 +36,7 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
         )}
       </div>
       {[
-        { label: "Stage", key: "stage", options: [["all","All stages"],["new","New"],["reviewing","Reviewing"],["contacted","Contacted"],["qualified","Qualified"],["proposal","Proposal"],["won","Won"],["lost","Lost"]] as [string,string][] },
+        { label: "Stage", key: "stage", options: [["all","All stages"],["needs_review","Needs Review"],["new","New"],["reviewing","Reviewing"],["contacted","Contacted"],["qualified","Qualified"],["proposal","Proposal"],["won","Won"],["lost","Lost"]] as [string,string][] },
         { label: "Grade", key: "grade", options: [["all","All grades"],["A+","A+ prospects"],["A","A prospects"],["B","B prospects"]] as [string,string][] },
         { label: "Min Score", key: "minScore", options: [["","Any score"],["90","90+ score"],["80","80+ score"],["70","70+ score"]] as [string,string][] },
       ].map(({ label, key, options }) => (
@@ -95,21 +95,52 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
   );
 }
 
-export default function LeadsPipeline() {
+function LeadsPipelineContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [leads, setLeads] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+
+  const handleBulkAction = async (action: 'delete' | 'recover' | 'permanent') => {
+    if (!selectedIds.length) return;
+    const apiUrl = "";
+    let endpoint = '/api/crm/leads';
+    let method = 'DELETE';
+    if (action === 'recover') {
+      endpoint = '/api/crm/leads/recover';
+      method = 'POST';
+    } else if (action === 'permanent') {
+      if (!confirm("Delete permanently? This cannot be undone.")) return;
+      endpoint = '/api/crm/leads/permanent';
+      method = 'DELETE';
+    }
+    try {
+      await fetch(`${apiUrl}${endpoint}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedIds })
+      });
+      loadLeads();
+    } catch (e) { console.error(e); }
+  };
+
   const [loading, setLoading] = useState(true);
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [industries, setIndustries] = useState<string[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  
+  const initialCampaignId = searchParams.get('campaignId') || "";
+  const [filters, setFilters] = useState<Filters>({ ...EMPTY_FILTERS, campaignId: initialCampaignId });
   const [showFilters, setShowFilters] = useState(false);
+  const statusTab = "active";
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
   const loadLeads = useCallback(async () => {
     setLoading(true);
+    setSelectedIds([]);
     try {
-      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')?.replace("localhost", "api") || "http://localhost:8000";
+      const apiUrl = "";
       const params = new URLSearchParams();
       if (filters.q.trim()) params.set("q", filters.q.trim());
       if (filters.stage !== "all") params.set("stage", filters.stage);
@@ -119,9 +150,9 @@ export default function LeadsPipeline() {
       if (filters.country && filters.country !== "all") params.set("country", filters.country);
       if (filters.contact) params.set("has_contact", filters.contact);
       if (filters.minScore) params.set("min_score", filters.minScore);
-      params.set("qualified_only", "true");
       params.set("page_size", "100");
-      const res = await fetch(`${apiUrl}/api/crm/leads?${params.toString()}`);
+      params.set("status", statusTab);
+      const res = await fetch(`${apiUrl}/api/crm/leads?${params.toString()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setCampaigns(data.facets?.campaigns || []);
@@ -132,7 +163,7 @@ export default function LeadsPipeline() {
       }
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [filters]);
+  }, [filters, statusTab]);
 
   useEffect(() => { const t = setTimeout(() => loadLeads(), 300); return () => clearTimeout(t); }, [filters, loadLeads]);
 
@@ -142,6 +173,7 @@ export default function LeadsPipeline() {
 
   const stageColor: Record<string, string> = {
     qualified: "bg-emerald-900/40 text-emerald-400 border border-emerald-800/40",
+    needs_review: "bg-orange-900/40 text-orange-400 border border-orange-800/40",
     new: "bg-zinc-800/60 text-zinc-300",
     contacted: "bg-blue-900/40 text-blue-400 border border-blue-800/40",
     reviewing: "bg-yellow-900/40 text-yellow-400 border border-yellow-800/40",
@@ -160,11 +192,12 @@ export default function LeadsPipeline() {
       <div className="hidden md:flex h-screen overflow-hidden">
 
         {/* Left filter sidebar */}
-        <aside className="w-56 shrink-0 bg-[#0a0a0c] border-r border-zinc-800/60 flex flex-col px-4 py-5 overflow-y-auto gap-0">
+        <aside className={`shrink-0 bg-[#0a0a0c] border-zinc-800/60 flex flex-col overflow-y-auto gap-0 transition-all duration-300 ease-in-out ${isSidebarOpen ? "w-56 px-4 py-5 border-r opacity-100" : "w-0 px-0 py-5 border-r-0 opacity-0 overflow-hidden"}`}>
           <div className="mb-6">
             <h1 className="text-base font-bold text-white">Leads CRM</h1>
             <p className="text-xs text-zinc-500 mt-0.5">{total} leads</p>
           </div>
+
           <FilterPanel filters={filters} updateFilters={updateFilters} campaigns={campaigns} industries={industries} countries={countries} onReset={resetFilters} />
         </aside>
 
@@ -172,6 +205,9 @@ export default function LeadsPipeline() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Top search bar */}
           <div className="flex items-center gap-3 px-5 py-3.5 border-b border-zinc-800/60 bg-[#09090b] shrink-0">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 -ml-2 text-zinc-400 hover:text-white transition rounded-md hover:bg-zinc-800/50" title="Toggle Filters">
+              {isSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+            </button>
             <div className="relative flex-1 max-w-lg">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4" />
               <input type="text" placeholder="Search companies..." value={filters.q} onChange={(e) => updateFilters({ q: e.target.value })}
@@ -198,7 +234,15 @@ export default function LeadsPipeline() {
               <table className="w-full text-sm border-collapse">
                 <thead className="sticky top-0 z-10 bg-[#0a0a0c] border-b border-zinc-800/60">
                   <tr className="text-zinc-500 text-[11px] uppercase tracking-widest">
-                    <th className="text-left px-5 py-3 font-semibold">Company</th>
+                    <th className="px-5 py-3 w-12 text-left">
+  <input 
+    type="checkbox" 
+    className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700 cursor-pointer" 
+    checked={leads.length > 0 && selectedIds.length === leads.length}
+    onChange={() => selectedIds.length === leads.length ? setSelectedIds([]) : setSelectedIds(leads.map(l => l.id))}
+  />
+</th>
+<th className="text-left px-2 py-3 font-semibold">Company</th>
                     <th className="text-left px-4 py-3 font-semibold">Industry</th>
                     <th className="text-left px-4 py-3 font-semibold">Location</th>
                     <th className="text-left px-4 py-3 font-semibold">Score</th>
@@ -213,7 +257,15 @@ export default function LeadsPipeline() {
                     return (
                       <tr key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}
                         className="hover:bg-white/[0.03] cursor-pointer transition-colors group">
-                        <td className="px-5 py-3.5">
+                        <td className="px-5 py-3.5 w-12" onClick={(e) => { e.stopPropagation(); setSelectedIds(prev => prev.includes(lead.id) ? prev.filter(id => id !== lead.id) : [...prev, lead.id]) }}>
+      <input 
+        type="checkbox" 
+        className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700 cursor-pointer pointer-events-none" 
+        checked={selectedIds.includes(lead.id)}
+        readOnly
+      />
+  </td>
+  <td className="px-2 py-3.5 cursor-pointer" onClick={() => router.push(`/leads/${lead.id}`)}>
                           <p className="font-semibold text-white group-hover:text-purple-300 transition-colors leading-tight">{lead.name}</p>
                           {lead.website_url && <p className="text-xs text-zinc-600 truncate max-w-[200px] mt-0.5">{lead.website_url.replace(/^https?:\/\//, "")}</p>}
                         </td>
@@ -354,6 +406,33 @@ export default function LeadsPipeline() {
           </div>
         </div>
       )}
-    </div>
+    
+      {/* Floating Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-5">
+          <div className="bg-[#18181b] border border-zinc-700 shadow-2xl rounded-full px-6 py-3 flex items-center gap-6 text-sm">
+            <span className="text-white font-medium">
+              <span className="text-purple-400">{selectedIds.length}</span> selected
+            </span>
+            <div className="w-px h-6 bg-zinc-700"></div>
+            <button 
+              onClick={() => handleBulkAction('delete')}
+              className="flex items-center gap-2 text-red-400 hover:text-red-300 font-medium transition"
+            >
+              Move to Trash
+            </button>
+            <button onClick={() => setSelectedIds([])} className="ml-4 text-zinc-500 hover:text-zinc-300 transition">Cancel</button>
+          </div>
+        </div>
+      )}
+</div>
+  );
+}
+
+export default function LeadsPipeline() {
+  return (
+    <Suspense fallback={<div className="p-10">Loading Leads CRM...</div>}>
+      <LeadsPipelineContent />
+    </Suspense>
   );
 }

@@ -11,6 +11,7 @@ import {
   Settings, 
   LogOut, 
   Search,
+  Trash2,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
@@ -132,6 +133,22 @@ export function Sidebar() {
                 <Link href="/settings" className={getLinkClass('/settings')}>
                   <Settings className="w-4 h-4 shrink-0" strokeWidth={2} />
                   <span className="group-data-[collapsible=icon]:hidden">Settings</span>
+                </Link>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup className="mt-4">
+          <SidebarGroupLabel className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 px-3 group-data-[collapsible=icon]:hidden">
+            Data
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu className="space-y-0.5">
+              <SidebarMenuItem>
+                <Link href="/trash" className={getLinkClass('/trash')}>
+                  <Trash2 className="w-4 h-4 shrink-0" strokeWidth={2} />
+                  <span className="group-data-[collapsible=icon]:hidden">Trash Bin</span>
                 </Link>
               </SidebarMenuItem>
             </SidebarMenu>

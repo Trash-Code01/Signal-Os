@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from worker import enrich_lead_contacts_task, process_campaign_task
 from core.database import get_db, engine
 from core.models import *
@@ -51,6 +51,13 @@ def ensure_crm_workspace_schema() -> None:
     """Create only the new CRM tables for deployments with legacy Alembic history."""
     CRMLead.__table__.create(bind=engine, checkfirst=True)
     CRMActivity.__table__.create(bind=engine, checkfirst=True)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at)"))
+        conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at)"))
+        conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at)"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -136,40 +143,101 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Campaign not found")
         
     total_target = campaign.target_quantity
-    discovered = db.query(Business).filter(Business.campaign_id == campaign_id).count()
-    websites = db.query(Website).join(Business).filter(Business.campaign_id == campaign_id).count()
-    opportunities = db.query(Opportunity).join(Business).filter(Business.campaign_id == campaign_id).count()
-    enriched = db.query(DecisionMaker).join(Business).filter(Business.campaign_id == campaign_id).count()
-    
-    # Determine which stage we are actively on
-    discovery_status = "done" if discovered > 0 and websites > 0 else ("running" if campaign.status == "processing" else "pending")
-    crawler_status = "done" if websites >= discovered and discovered > 0 and opportunities > 0 else ("running" if discovered > 0 and websites < discovered else "pending")
-    ai_status = "done" if opportunities >= discovered and discovered > 0 else ("running" if websites > 0 and opportunities < websites else "pending")
-    enrichment_status = "done" if campaign.status == "completed" else ("running" if opportunities > 0 and campaign.status == "processing" else "pending")
-    
-    if campaign.status == "completed":
-        discovery_status = crawler_status = ai_status = enrichment_status = "done"
+    active_business = db.query(Business).filter(
+        Business.campaign_id == campaign_id,
+        Business.deleted_at.is_(None),
+    )
+    discovered = active_business.count()
+    websites = (
+        db.query(Website)
+        .join(Business)
+        .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+        .count()
+    )
+    opportunities = (
+        db.query(Opportunity)
+        .join(Business)
+        .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+        .count()
+    )
+    enriched = (
+        db.query(DecisionMaker)
+        .join(Business)
+        .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+        .count()
+    )
+    qualified = active_business.filter(Business.status == "qualified").count()
+    needs_review = active_business.filter(Business.status.in_([
+        "needs_review", "needs_official_website", "needs_research", "needs_contact_enrichment"
+    ])).count()
+    rejected = active_business.filter(Business.status.like("rejected%")).count()
+    terminal_statuses = {"completed", "completed_partial", "needs_review", "failed"}
+    is_terminal = campaign.status in terminal_statuses
+    is_running = campaign.status == "processing"
+
+    # Stage statuses are independent; each reflects its own data only.
+    # discovery: done if any businesses were found
+    discovery_status = (
+        "done" if discovered > 0
+        else "running" if is_running
+        else "pending"
+    )
+
+    # crawler: done if all discovered businesses have a Website record or were skipped (no website / unreachable)
+    skipped_crawl = active_business.filter(
+        Business.status.in_(["needs_official_website", "rejected_no_website", "rejected_unreachable"])
+    ).count()
+    businesses_needing_crawl = max(0, discovered - skipped_crawl)
+    crawler_status = (
+        "done" if is_terminal and discovered > 0
+        else "done" if discovered > 0 and websites >= businesses_needing_crawl and businesses_needing_crawl > 0
+        else "running" if discovered > 0 and is_running and websites < discovered
+        else "pending"
+    )
+
+    # ai_sdr: done if terminal (AI ran; some may have passed, some failed with needs_research)
+    # running if crawler is done and campaign is still processing
+    ai_status = (
+        "done" if is_terminal and websites > 0
+        else "running" if websites > 0 and is_running
+        else "pending"
+    )
+
+    # enrichment: done if terminal; running if opportunities exist and still processing
+    enrichment_status = (
+        "done" if is_terminal and (enriched > 0 or opportunities > 0)
+        else "running" if opportunities > 0 and is_running
+        else "pending"
+    )
 
     stages = [
-        {"key": "discovery", "label": "Business Discovery & Deduplication", "status": discovery_status, "count": discovered, "total": total_target},
-        {"key": "crawler", "label": "Playwright Crawler & UX Audit", "status": crawler_status, "count": websites, "total": discovered},
-        {"key": "ai_sdr", "label": "AI SDR Analysis & Scoring", "status": ai_status, "count": opportunities, "total": websites},
-        {"key": "enrichment", "label": "Apollo & Hunter Enrichment", "status": enrichment_status, "count": enriched, "total": opportunities},
+        {"key": "discovery",   "label": "Business Discovery & Deduplication", "status": discovery_status,   "count": discovered,   "total": total_target},
+        {"key": "crawler",     "label": "Website Crawl & UX Audit",           "status": crawler_status,     "count": websites,     "total": discovered},
+        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": websites},
+        {"key": "enrichment",  "label": "Contact Enrichment",                 "status": enrichment_status,  "count": enriched,     "total": opportunities},
     ]
     
     return {
+        "status": campaign.status,
+        "terminal": is_terminal,
         "campaign_id": campaign.id,
         "name": campaign.name,
-        "status": campaign.status,
         "stats": {
             "discovered": discovered,
-            "qualified": opportunities,
-            "enriched": enriched
+            "qualified": qualified,
+            "opportunities": opportunities,
+            "enriched": enriched,
+            "needs_review": needs_review,
+            "rejected": rejected,
+            "target": total_target,
         },
+        "summary": f"{qualified} qualified / {total_target} target, {needs_review} need review, {rejected} rejected.",
         "stages": stages
     }
 
+
 class CampaignCreateRequest(BaseModel):
+
     name: str
     country: str
     state_province: Optional[str] = None
@@ -194,7 +262,9 @@ def sync_sequences(db: Session = Depends(get_db)):
     db.commit()
     return {"status": "synced"}
 
+
 @app.post("/api/campaigns")
+
 def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db)):
     try:
         # Create industry config if it doesn't exist
@@ -231,7 +301,7 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
     
         # Trigger worker
         from worker import process_campaign_task
-        task = process_campaign_task.delay(campaign.id)
+        task = process_campaign_task.apply_async(args=[campaign.id], queue='devacia_queue')
         return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id}
     except Exception as e:
         import traceback
@@ -239,7 +309,7 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=error_details)
 
-CRM_STAGES = ("new", "reviewing", "contacted", "qualified", "proposal", "won", "lost", "archived")
+CRM_STAGES = ("new", "reviewing", "contacted", "qualified", "needs_review", "proposal", "won", "lost", "archived")
 
 
 class CRMLeadUpdate(BaseModel):
@@ -280,7 +350,7 @@ class CRMLeadCreate(BaseModel):
 
 def _normalise_stage(stage: Optional[str]) -> str:
     value = (stage or "new").strip().lower().replace(" ", "_")
-    aliases = {"raw": "new", "processing": "reviewing", "contact": "contacted", "closed_won": "won", "closed_lost": "lost"}
+    aliases = {"raw": "new", "processing": "reviewing", "contact": "contacted", "closed_won": "won", "closed_lost": "lost", "needs_research": "needs_review", "needs_official_website": "needs_review", "needs_contact_enrichment": "needs_review", "researching": "needs_review"}
     value = aliases.get(value, value)
     return value if value in CRM_STAGES else "new"
 
@@ -310,21 +380,22 @@ def _format_contact(contact: DecisionMaker) -> dict:
 
 def _ensure_crm_records(db: Session) -> None:
     """Backfill CRM state for campaign leads created before the CRM existed."""
-    missing_business_ids = [
-        business_id
-        for (business_id,) in (
-            db.query(Business.id)
-            .outerjoin(CRMLead, CRMLead.business_id == Business.id)
-            .filter(CRMLead.id.is_(None))
-            .filter(Business.status == "qualified")
-            .all()
-        )
-    ]
-    if missing_business_ids:
-        db.add_all(
-            CRMLead(business_id=business_id, stage="new", source="campaign")
-            for business_id in missing_business_ids
-        )
+    missing_businesses = (
+        db.query(Business.id, Business.status)
+        .outerjoin(CRMLead, CRMLead.business_id == Business.id)
+        .outerjoin(Campaign, Campaign.id == Business.campaign_id)
+        .filter(CRMLead.id.is_(None))
+        .filter(Business.deleted_at.is_(None))
+        .filter(or_(Campaign.id.is_(None), Campaign.deleted_at.is_(None)))
+        .filter(Business.status.in_([
+            "qualified", "needs_review", "needs_official_website", "needs_research", "needs_contact_enrichment"
+        ]))
+        .all()
+    )
+    if missing_businesses:
+        for b_id, b_status in missing_businesses:
+            stage = "qualified" if b_status == "qualified" else "needs_review"
+            db.add(CRMLead(business_id=b_id, stage=stage, source="campaign"))
         db.commit()
 
 
@@ -347,7 +418,7 @@ def _contacts_by_business(db: Session, business_ids: List[int]) -> dict:
 
 def _display_opportunity_text(value: Optional[str]) -> Optional[str]:
     """Avoid presenting provider failures or placeholder values as lead intelligence."""
-    text = (value or "").strip()
+    text = _clean_text(value)
     placeholders = {
         "none", "n/a", "null", "good fit", "standard booking system",
         "pitch standard booking system", "no booking system found",
@@ -357,11 +428,33 @@ def _display_opportunity_text(value: Optional[str]) -> Optional[str]:
     return text
 
 
+def _clean_text(value) -> str:
+    """Clean old mojibake and unsafe display text before it reaches the UI."""
+    text_value = "" if value is None else str(value)
+    replacements = {
+        "\u00c3\u00a2\u00c2\u0080\u00c2\u0093": "-",
+        "\u00c3\u00a2\u00c2\u0080\u00c2\u0094": "-",
+        "\u00c3\u00a2\u00c2\u0080\u00c2\u00a2": " | ",
+        "\u00c3\u00a2\u00c2\u0080\u00c2\u0099": "'",
+        "\u00c3\u00a2\u00c2\u0080\u00c2\u009c": '"',
+        "\u00c3\u00a2\u00c2\u0080\u00c2\u009d": '"',
+        "\u00e2\u0080\u0093": "-",
+        "\u00e2\u0080\u0094": "-",
+        "\u00e2\u0080\u00a2": " | ",
+        "\u00e2\u0080\u0099": "'",
+        "\u00c3\u0082\u00c2": "",
+        "\u00c2": "",
+    }
+    for bad, good in replacements.items():
+        text_value = text_value.replace(bad, good)
+    return text_value.strip()
+
+
 def _ticket_range(opportunity: Optional[Opportunity]) -> Optional[str]:
     if not opportunity or (opportunity.ticket_low is None and opportunity.ticket_high is None):
         return None
     if opportunity.ticket_low is not None and opportunity.ticket_high is not None:
-        return f"${opportunity.ticket_low:,}–${opportunity.ticket_high:,}"
+        return f"${opportunity.ticket_low:,}-${opportunity.ticket_high:,}"
     value = opportunity.ticket_low if opportunity.ticket_low is not None else opportunity.ticket_high
     return f"${value:,}"
 
@@ -467,6 +560,7 @@ def _serialize_crm_lead(
 def _get_crm_leads(
     db: Session,
     q: str = "",
+    status: str = "active",
     stage: Optional[str] = None,
     grade: Optional[str] = None,
     campaign_id: Optional[int] = None,
@@ -487,6 +581,17 @@ def _get_crm_leads(
         .join(CRMLead, CRMLead.business_id == Business.id)
         .outerjoin(Campaign, Campaign.id == Business.campaign_id)
     )
+
+    deleted_filter = or_(
+        CRMLead.deleted_at.is_not(None),
+        Business.deleted_at.is_not(None),
+        Campaign.deleted_at.is_not(None),
+    )
+    if status == "trash":
+        query = query.filter(deleted_filter)
+    else:
+        query = query.filter(CRMLead.deleted_at.is_(None), Business.deleted_at.is_(None))
+        query = query.filter(or_(Campaign.id.is_(None), Campaign.deleted_at.is_(None)))
 
     if q.strip():
         search = f"%{q.strip()}%"
@@ -532,6 +637,7 @@ def _get_crm_leads(
 @app.get("/api/crm/leads")
 def list_crm_leads(
     q: str = "",
+    status: str = "active",
     stage: Optional[str] = None,
     grade: Optional[str] = None,
     campaign_id: Optional[int] = None,
@@ -539,63 +645,43 @@ def list_crm_leads(
     country: Optional[str] = None,
     has_contact: Optional[bool] = None,
     min_score: Optional[int] = None,
-    qualified_only: bool = False,
+    qualified_only: Optional[bool] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
 ):
     page = max(page, 1)
     page_size = min(max(page_size, 1), 200)
+
+    # Default: show only qualified leads. When user filters by stage, disable qualified gate.
+    if qualified_only is None:
+        qualified_only = (stage is None) or (stage == "qualified")
+
     data = _get_crm_leads(
-        db,
-        q=q,
-        stage=stage,
-        grade=grade,
-        campaign_id=campaign_id,
-        industry=industry,
-        country=country,
-        has_contact=has_contact,
-        min_score=min_score,
-        qualified_only=qualified_only,
-        page=page,
-        page_size=page_size,
+        db, q=q, status=status, stage=stage, grade=grade,
+        campaign_id=campaign_id, industry=industry, country=country,
+        has_contact=has_contact, min_score=min_score,
+        qualified_only=qualified_only, page=page, page_size=page_size,
     )
     campaigns = [
-        {"id": campaign.id, "name": campaign.name}
-        for campaign in db.query(Campaign).order_by(Campaign.created_at.desc()).all()
+        {"id": c.id, "name": c.name}
+        for c in db.query(Campaign).filter(Campaign.deleted_at.is_(None)).order_by(Campaign.created_at.desc()).all()
     ]
-    # Only surface facet values for leads that are actually visible in the CRM
-    # (qualified campaign leads + all manual/import leads)
-    from sqlalchemy import or_ as _or
     visible_industries = [
         row[0]
         for row in (
             db.query(Business.industry)
             .join(CRMLead, CRMLead.business_id == Business.id)
             .filter(Business.industry.isnot(None))
-            .filter(_or(Business.status == "qualified", CRMLead.source.in_(("manual", "import"))))
+            .filter(Business.deleted_at.is_(None), CRMLead.deleted_at.is_(None))
             .distinct()
             .all()
         )
+        if row[0]
     ]
-    visible_countries = [
-        row[0]
-        for row in (
-            db.query(Business.country)
-            .join(CRMLead, CRMLead.business_id == Business.id)
-            .filter(Business.country.isnot(None))
-            .filter(_or(Business.status == "qualified", CRMLead.source.in_(("manual", "import"))))
-            .distinct()
-            .all()
-        )
-    ]
-    data["facets"] = {
-        "campaigns": campaigns,
-        "stages": list(CRM_STAGES),
-        "industries": sorted(set(visible_industries)),
-        "countries": sorted(set(visible_countries))
-    }
+    data["facets"] = {"campaigns": campaigns, "industries": sorted(visible_industries)}
     return data
+
 
 
 @app.get("/api/leads")
@@ -612,8 +698,6 @@ def _get_crm_lead_or_404(lead_id: int, db: Session) -> tuple[Business, CRMLead]:
     crm_lead = db.query(CRMLead).filter(CRMLead.business_id == lead_id).first()
     if not crm_lead:
         raise HTTPException(status_code=404, detail="CRM record not found")
-    if crm_lead.source == "campaign" and business.status != "qualified":
-        raise HTTPException(status_code=404, detail="This campaign record has not passed qualification")
     return business, crm_lead
 
 
@@ -622,7 +706,6 @@ def update_crm_lead(lead_id: int, payload: CRMLeadUpdate, db: Session = Depends(
     business, crm_lead = _get_crm_lead_or_404(lead_id, db)
     if "stage" in payload.model_fields_set and payload.stage is not None:
         crm_lead.stage = _normalise_stage(payload.stage)
-        business.status = crm_lead.stage
     if "owner_name" in payload.model_fields_set:
         crm_lead.owner_name = payload.owner_name.strip() or None
     if "tags" in payload.model_fields_set:
@@ -645,7 +728,6 @@ def bulk_update_crm_leads(payload: CRMLeadBulkUpdate, db: Session = Depends(get_
     for record in records:
         record.stage = stage
         record.last_activity_at = datetime.now(timezone.utc)
-    db.query(Business).filter(Business.id.in_(lead_ids)).update({Business.status: stage}, synchronize_session=False)
     db.commit()
     return {"status": "updated", "updated": len(records), "stage": stage}
 
@@ -843,12 +925,35 @@ def _safe_export_cell(value) -> str:
 
 
 def _crm_export_rows(leads: List[dict]) -> tuple[List[str], List[List[str]]]:
-    header = ["Company", "Website", "Stage", "Score", "Grade", "Industry", "Location", "Owner", "Tags", "Campaign", "Primary problem", "Recommended offer", "Contact", "Contact email", "Contact phone", "Next follow-up"]
+    header = [
+        "Company", "Website", "Stage", "Score", "Grade", "Industry", "Location",
+        "Owner", "Tags", "Campaign", "Primary problem", "Recommended offer",
+        "Primary contact", "Primary contact title", "Primary contact email", "Primary contact phone",
+        "All emails", "Website emails", "Apollo emails", "All phones", "LinkedIn profiles",
+        "Next follow-up"
+    ]
     rows = []
     for lead in leads:
         contact = lead["contacts"][0] if lead["contacts"] else {}
+        contacts = lead.get("contacts") or []
+        all_emails = sorted({c.get("email") for c in contacts if c.get("email")})
+        website_emails = sorted({
+            c.get("email") for c in contacts
+            if c.get("email") and "website" in (c.get("source") or "").lower()
+        })
+        apollo_emails = sorted({
+            c.get("email") for c in contacts
+            if c.get("email") and "apollo" in (c.get("source") or "").lower()
+        })
+        all_phones = sorted({c.get("phone") for c in contacts if c.get("phone")})
+        linkedin_profiles = sorted({c.get("linkedin_url") for c in contacts if c.get("linkedin_url")})
         rows.append([_safe_export_cell(value) for value in [
-            lead["name"], lead["website_url"], lead["stage"], lead["commercial_score"], lead["grade"], lead["industry"], lead["location"], lead["owner_name"], ", ".join(lead["tags"]), lead["campaign_name"], lead["primary_problem"], lead["recommended_offer"], contact.get("name"), contact.get("email"), contact.get("phone"), lead["next_follow_up_at"],
+            lead["name"], lead["website_url"], lead["stage"], lead["commercial_score"], lead["grade"],
+            lead["industry"], lead["location"], lead["owner_name"], ", ".join(lead["tags"]),
+            lead["campaign_name"], lead["primary_problem"], lead["recommended_offer"],
+            contact.get("name"), contact.get("title"), contact.get("email"), contact.get("phone"),
+            "; ".join(all_emails), "; ".join(website_emails), "; ".join(apollo_emails),
+            "; ".join(all_phones), "; ".join(linkedin_profiles), lead["next_follow_up_at"],
         ]])
     return header, rows
 
@@ -944,9 +1049,15 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
     }
 
 @app.get("/api/campaigns")
-def get_all_campaigns(db: Session = Depends(get_db)):
-    """Fetch all campaigns with their locations."""
-    campaigns = db.query(Campaign).order_by(Campaign.created_at.desc()).all()
+def get_all_campaigns(status: str = "active", db: Session = Depends(get_db)):
+    """Fetch all campaigns with their locations, filtered by active or trash."""
+    query = db.query(Campaign)
+    if status == "trash":
+        query = query.filter(Campaign.deleted_at.is_not(None))
+    else:
+        query = query.filter(Campaign.deleted_at.is_(None))
+
+    campaigns = query.order_by(Campaign.created_at.desc()).all()
     from core.models import CampaignLocation
     result = []
     for c in campaigns:
@@ -1085,7 +1196,7 @@ def get_lead_details(lead_id: int, db: Session = Depends(get_db)):
             "audit_available": bool(website and website.is_live is True and audit),
             "why_contact": _display_opportunity_text(opp.ai_reasoning) if opp else None,
             "evidence_labels": evidence_summary,
-            "evidence_summary": " • ".join(evidence_summary) if evidence_summary else None,
+            "evidence_summary": " | ".join(evidence_summary) if evidence_summary else None,
             "owner": {
                 "name": dossier_contact.get("name") if dossier_contact else ("Business contact" if business.primary_phone else None),
                 "role": dossier_contact.get("title") if dossier_contact else "Company phone",
@@ -1137,7 +1248,7 @@ def get_lead_details(lead_id: int, db: Session = Depends(get_db)):
 def enrich_crm_lead_contacts(lead_id: int, db: Session = Depends(get_db)):
     """Queue a safe refresh of Apollo decision-maker and public social data."""
     _get_crm_lead_or_404(lead_id, db)
-    task = enrich_lead_contacts_task.delay(lead_id)
+    task = enrich_lead_contacts_task.apply_async(args=[lead_id], queue='devacia_queue')
     return {"status": "queued", "task_id": task.id, "message": "Apollo decision-maker enrichment has started."}
 
 @app.post("/api/leads/{lead_id}/export")
@@ -1150,3 +1261,243 @@ def export_single_lead(lead_id: int, db: Session = Depends(get_db)):
 def export_leads_csv(db: Session = Depends(get_db)):
     """Legacy CSV route kept for bookmarked exports."""
     return export_crm_leads(format="csv", ids=[], db=db)
+
+# ==========================================
+# TRASH BIN BULK ACTIONS
+# ==========================================
+from pydantic import BaseModel
+from typing import List
+
+class BulkActionRequest(BaseModel):
+    ids: List[int]
+
+
+def _hard_delete_businesses(db: Session, business_ids: List[int]) -> int:
+    """Delete businesses and dependent CRM/intelligence records in FK-safe order."""
+    business_ids = list(dict.fromkeys(int(business_id) for business_id in business_ids if business_id))
+    if not business_ids:
+        return 0
+
+    website_ids = [
+        website_id for (website_id,) in
+        db.query(Website.id).filter(Website.business_id.in_(business_ids)).all()
+    ]
+    if website_ids:
+        page_ids = [
+            page_id for (page_id,) in
+            db.query(WebsitePage.id).filter(WebsitePage.website_id.in_(website_ids)).all()
+        ]
+        db.query(WebsiteEvidence).filter(WebsiteEvidence.business_id.in_(business_ids)).delete(synchronize_session=False)
+        if page_ids:
+            db.query(WebsiteScreenshot).filter(WebsiteScreenshot.website_page_id.in_(page_ids)).delete(synchronize_session=False)
+        db.query(WebsiteAudit).filter(WebsiteAudit.website_id.in_(website_ids)).delete(synchronize_session=False)
+        db.query(WebsiteTechnology).filter(WebsiteTechnology.website_id.in_(website_ids)).delete(synchronize_session=False)
+        db.query(WebsitePage).filter(WebsitePage.website_id.in_(website_ids)).delete(synchronize_session=False)
+        db.query(Website).filter(Website.id.in_(website_ids)).delete(synchronize_session=False)
+    else:
+        db.query(WebsiteEvidence).filter(WebsiteEvidence.business_id.in_(business_ids)).delete(synchronize_session=False)
+
+    db.query(AIAnalysis).filter(AIAnalysis.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(Opportunity).filter(Opportunity.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(Score).filter(Score.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(DecisionMaker).filter(DecisionMaker.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(SocialProfile).filter(SocialProfile.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(BusinessSource).filter(BusinessSource.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(CRMActivity).filter(CRMActivity.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(CRMNote).filter(CRMNote.business_id.in_(business_ids)).delete(synchronize_session=False)
+    db.query(CRMLead).filter(CRMLead.business_id.in_(business_ids)).delete(synchronize_session=False)
+    deleted = db.query(Business).filter(Business.id.in_(business_ids)).delete(synchronize_session=False)
+    return deleted
+
+@app.delete('/api/campaigns')
+def bulk_delete_campaigns(payload: BulkActionRequest, db: Session = Depends(get_db)):
+    now = func.now()
+    db.query(Campaign).filter(Campaign.id.in_(payload.ids)).update({Campaign.deleted_at: now}, synchronize_session=False)
+    businesses = db.query(Business).filter(Business.campaign_id.in_(payload.ids)).all()
+    b_ids = [b.id for b in businesses]
+    if b_ids:
+        db.query(Business).filter(Business.id.in_(b_ids)).update({Business.deleted_at: now}, synchronize_session=False)
+        db.query(CRMLead).filter(CRMLead.business_id.in_(b_ids)).update({CRMLead.deleted_at: now}, synchronize_session=False)
+    db.commit()
+    return {'status': 'success'}
+
+@app.post('/api/campaigns/recover')
+def bulk_recover_campaigns(payload: BulkActionRequest, db: Session = Depends(get_db)):
+    db.query(Campaign).filter(Campaign.id.in_(payload.ids)).update({Campaign.deleted_at: None}, synchronize_session=False)
+    businesses = db.query(Business).filter(Business.campaign_id.in_(payload.ids)).all()
+    b_ids = [b.id for b in businesses]
+    if b_ids:
+        db.query(Business).filter(Business.id.in_(b_ids)).update({Business.deleted_at: None}, synchronize_session=False)
+        db.query(CRMLead).filter(CRMLead.business_id.in_(b_ids)).update({CRMLead.deleted_at: None}, synchronize_session=False)
+    db.commit()
+    return {'status': 'success'}
+
+@app.delete('/api/campaigns/permanent')
+def bulk_hard_delete_campaigns(payload: BulkActionRequest, db: Session = Depends(get_db)):
+    campaign_ids = list(dict.fromkeys(payload.ids))
+    business_ids = [
+        business_id for (business_id,) in
+        db.query(Business.id).filter(Business.campaign_id.in_(campaign_ids)).all()
+    ]
+    _hard_delete_businesses(db, business_ids)
+    db.query(CampaignLocation).filter(CampaignLocation.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
+    db.query(JobRun).filter(JobRun.campaign_id.in_(campaign_ids)).delete(synchronize_session=False)
+    db.query(Campaign).filter(Campaign.id.in_(campaign_ids)).delete(synchronize_session=False)
+    db.commit()
+    return {'status': 'success'}
+
+@app.delete('/api/crm/leads')
+def bulk_delete_leads(payload: BulkActionRequest, db: Session = Depends(get_db)):
+    now = func.now()
+    db.query(CRMLead).filter(CRMLead.business_id.in_(payload.ids)).update({CRMLead.deleted_at: now}, synchronize_session=False)
+    db.query(Business).filter(Business.id.in_(payload.ids)).update({Business.deleted_at: now}, synchronize_session=False)
+    db.commit()
+    return {'status': 'success'}
+
+@app.post('/api/crm/leads/recover')
+def bulk_recover_leads(payload: BulkActionRequest, db: Session = Depends(get_db)):
+    db.query(CRMLead).filter(CRMLead.business_id.in_(payload.ids)).update({CRMLead.deleted_at: None}, synchronize_session=False)
+    db.query(Business).filter(Business.id.in_(payload.ids)).update({Business.deleted_at: None}, synchronize_session=False)
+    db.commit()
+    return {'status': 'success'}
+
+@app.delete('/api/crm/leads/permanent')
+def bulk_hard_delete_leads(payload: BulkActionRequest, db: Session = Depends(get_db)):
+    deleted = _hard_delete_businesses(db, payload.ids)
+    db.commit()
+    return {'status': 'success', 'deleted': deleted}
+
+from pydantic import BaseModel
+class EmailGenerateResponse(BaseModel):
+    email_body: str
+    source: str = "ai"
+
+
+def _lead_email_context(db: Session, biz: Business, opp: Optional[Opportunity]) -> str:
+    contacts = db.query(DecisionMaker).filter(DecisionMaker.business_id == biz.id).all()
+    website = db.query(Website).filter(Website.business_id == biz.id).first()
+    audit = db.query(WebsiteAudit).filter(WebsiteAudit.website_id == website.id).first() if website else None
+    evidence = db.query(WebsiteEvidence).filter(WebsiteEvidence.business_id == biz.id).limit(8).all()
+    social_profiles = db.query(SocialProfile).filter(SocialProfile.business_id == biz.id).all()
+
+    named_contacts = [
+        f"{' '.join(part for part in [c.first_name, c.last_name] if part)} ({c.title or 'decision maker'})"
+        for c in contacts
+        if c.first_name or c.last_name
+    ]
+    emails = sorted({c.email for c in contacts if c.email})
+    phones = sorted({(c.phone or c.mobile) for c in contacts if c.phone or c.mobile})
+    gaps = []
+    if audit:
+        if audit.booking_detected is False:
+            gaps.append("no online booking")
+        if audit.quote_form is False:
+            gaps.append("no quote/estimate funnel")
+        if audit.contact_form is False:
+            gaps.append("no lead form")
+        if audit.phone_cta is False:
+            gaps.append("weak phone call-to-action")
+
+    lines = [
+        f"Business Name: {_clean_text(biz.name)}",
+        f"Industry: {_clean_text(biz.industry)}",
+        f"Location: {_clean_text(', '.join(part for part in [biz.city, biz.state_province, biz.country] if part))}",
+        f"Website: {_clean_text(biz.website_url or 'No official website found')}",
+        f"Google Rating: {_clean_text(biz.rating)}/5 ({_clean_text(biz.review_count)} reviews)",
+        f"Known Contacts: {_clean_text('; '.join(named_contacts) or 'No named decision maker found')}",
+        f"Known Emails: {_clean_text('; '.join(emails) or 'No email found')}",
+        f"Known Phones: {_clean_text('; '.join(phones) or biz.primary_phone or 'No phone found')}",
+        f"Social Profiles: {_clean_text('; '.join(p.profile_url for p in social_profiles if p.profile_url) or 'None found')}",
+        f"Observed Digital Gaps: {_clean_text('; '.join(gaps) or 'No confirmed digital gap')}",
+    ]
+    if opp:
+        lines.extend([
+            f"Primary Problem: {_clean_text(opp.primary_problem)}",
+            f"Recommended Devacia Offer: {_clean_text(opp.recommended_offer)}",
+            f"Estimated Project Value: {_ticket_range(opp) or 'Pending'}",
+            f"Existing Outreach Angle: {_clean_text(opp.outreach_angle)}",
+            f"AI Reasoning: {_clean_text(opp.ai_reasoning)}",
+        ])
+    if evidence:
+        lines.append("Evidence Snippets:")
+        lines.extend(f"- {_clean_text(item.finding)}" for item in evidence if item.finding)
+    return "\n".join(line for line in lines if line and not line.endswith(": "))
+
+
+def _fallback_personalized_email(biz: Business, opp: Optional[Opportunity]) -> str:
+    business_name = _clean_text(biz.name) or "your business"
+    first_problem = _clean_text(opp.primary_problem if opp else "") or "a few conversion gaps on your website"
+    offer = _clean_text(opp.recommended_offer if opp else "") or "a cleaner lead-capture system"
+    location = _clean_text(", ".join(part for part in [biz.city, biz.country] if part))
+    subject = f"Subject: Quick idea for {business_name}"
+    intro_location = f" in {location}" if location else ""
+    return (
+        f"{subject}\n\n"
+        f"Hi,\n\n"
+        f"I was reviewing {business_name}{intro_location} and noticed {first_problem}. "
+        f"Devacia can help with {offer}, so visitors have a clearer path to contact, book, or request a quote.\n\n"
+        f"Would a quick 15-minute call this week make sense?\n\n"
+        f"Laraib | Devacia"
+    )
+
+@app.post("/api/leads/{lead_id}/generate-email", response_model=EmailGenerateResponse)
+def generate_lead_email(lead_id: int, db: Session = Depends(get_db)):
+    biz, crm = _get_crm_lead_or_404(lead_id, db)
+    opp = db.query(Opportunity).filter(Opportunity.business_id == biz.id).first()
+    context = _lead_email_context(db, biz, opp)
+    
+    system_prompt = """You are an elite Sales Development Representative (SDR) writing for Devacia, a web development and digital marketing agency.
+
+Your task: Write a SHORT, high-converting cold outreach email.
+
+Rules:
+1. Address the decision maker by first name if known, otherwise use a natural greeting.
+2. Reference their SPECIFIC business and location (show you did your homework).
+3. Mention one specific digital gap or opportunity you spotted (e.g., no website, no booking system, slow mobile).
+4. Offer a single clear value proposition from Devacia.
+5. Include a low-friction CTA (e.g., "Would a 15-minute call this week work?").
+6. Keep it under 150 words. No fluff. No generic phrases.
+7. Format: Subject line first, then the email body. No placeholders like [Your Name].
+8. Sign off as: Laraib | Devacia"""
+
+    user_prompt = f"Write a cold outreach email using this intelligence:\n\n{context}"
+    email_text = ""
+    source = "fallback"
+
+    try:
+        from providers.groq_provider import GroqProvider
+        import groq as groq_sdk
+
+        groq_provider = GroqProvider()
+        if groq_provider.api_key:
+            sync_client = groq_sdk.Groq(api_key=groq_provider.api_key)
+            completion = sync_client.chat.completions.create(
+                model=groq_provider.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.7,
+                max_tokens=2048
+            )
+            email_text = completion.choices[0].message.content or ""
+            source = "groq"
+    except Exception as exc:
+        print(f"Email generation AI failed for lead {lead_id}: {str(exc)[:200]}")
+
+    # Strip <think> blocks (including unclosed ones if truncated)
+    email_text = re.sub(r"<think>.*?(?:</think>|$)", "", email_text, flags=re.DOTALL).strip()
+    email_text = _clean_text(email_text)
+    if not email_text:
+        email_text = _fallback_personalized_email(biz, opp)
+
+    db.add(CRMActivity(
+        business_id=biz.id,
+        activity_type="generated_email",
+        body=email_text,
+        created_by="Lead Intelligence",
+    ))
+    crm.last_activity_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return EmailGenerateResponse(email_body=email_text, source=source)

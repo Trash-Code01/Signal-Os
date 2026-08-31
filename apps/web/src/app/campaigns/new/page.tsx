@@ -26,12 +26,12 @@ export default function NewCampaignPage() {
   const [form, setForm] = useState({
     name: '',
     country: 'USA',
-    state: 'Texas',
-    cities: 'Dallas',
+    state: '',
+    cities: '',
     industry: 'roofing',
     sub_industry: '',
-    raw_target: 500,
-    min_score: 75,
+    raw_target: 10,
+    min_score: 60,
     a_plus_target: 50,
     a_target: 50,
     research_depth: 'deep',
@@ -42,7 +42,7 @@ export default function NewCampaignPage() {
   async function handleSubmit() {
     setLoading(true);
     try {
-      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/campaigns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,7 +123,7 @@ export default function NewCampaignPage() {
                 <select
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors"
                   value={form.country}
-                  onChange={e => setForm({ ...form, country: e.target.value })}
+                  onChange={e => setForm({ ...form, country: e.target.value, state: '', cities: '' })}
                 >
                   <option>USA</option>
                   <option>UK</option>

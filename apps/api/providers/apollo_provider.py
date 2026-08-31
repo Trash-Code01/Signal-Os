@@ -1,56 +1,44 @@
 import os
 import aiohttp
-import urllib.parse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.orm import Session
+from sqlalchemy import func, nullslast
 from typing import List, Dict, Any, Optional
 
-from sqlalchemy.orm import Session
-from core.database import SessionLocal
 from core.models import ProviderAccount
 from core.providers import EmailProvider
 
+
 class ApolloProviderPool:
     """Manages rotation, limits, and cooldowns for Apollo.io API keys."""
-    
+
     def __init__(self, db: Session):
         self.db = db
-        
+
     def _get_active_account(self) -> Optional[ProviderAccount]:
-        """Find an active account under limits and not in cooldown."""
+        """Find an active account under limits and not in cooldown, using LRU round-robin."""
         now = datetime.now(timezone.utc)
-        
-        # Simple reset of usage_today if it's a new day (for MVP we'll just check if last_request was yesterday)
-        # In a real app this would be a cron job
-        
-        account = self.db.query(ProviderAccount).filter(
-            ProviderAccount.provider_name == "apollo",
-            ProviderAccount.status == "active",
-            ProviderAccount.usage_today < ProviderAccount.limit_per_day
-        ).filter(
-            (ProviderAccount.cooldown_until == None) | (ProviderAccount.cooldown_until < now)
-        ).first()
-        
-        if not account:
-            api_key = os.environ.get("APOLLO_API_KEY", "FUc0sLL0bqT181HhTUm0WQ").strip()
-            if api_key:
-                account = ProviderAccount(
-                    provider_name="apollo",
-                    api_key_ref=api_key,
-                    status="active",
-                    usage_today=0,
-                    limit_per_day=50
-                )
-                self.db.add(account)
-                self.db.commit()
-                self.db.refresh(account)
-                
-        return account
+        return (
+            self.db.query(ProviderAccount)
+            .filter(
+                ProviderAccount.provider_name == "apollo",
+                ProviderAccount.status == "active",
+                ProviderAccount.usage_today < func.coalesce(ProviderAccount.limit_per_day, 50),
+                (ProviderAccount.cooldown_until == None) | (ProviderAccount.cooldown_until < now),
+            )
+            .order_by(nullslast(ProviderAccount.last_request_at.asc()), ProviderAccount.id.asc())
+            .first()
+        )
 
     def _mark_cooldown(self, account: ProviderAccount, minutes: int = 60):
         account.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
         account.status = "cooldown"
         self.db.commit()
-        
+
+    def _mark_exhausted(self, account: ProviderAccount):
+        account.status = "exhausted"
+        self.db.commit()
+
     def _increment_usage(self, account: ProviderAccount):
         account.usage_today = (account.usage_today or 0) + 1
         account.last_request_at = datetime.now(timezone.utc)
@@ -58,29 +46,43 @@ class ApolloProviderPool:
 
 
 class ApolloProvider(EmailProvider):
+    """
+    Apollo.io enrichment provider.
+
+    Strategy (industry-standard, free-plan compatible):
+    ─────────────────────────────────────────────────────
+    1.  Targeted owner lookup — when a named owner (first + last name) is already
+        known (found via Serper), we search Apollo by name + domain.
+        Endpoint: POST /api/v1/people/search  ← free plan compatible
+        This costs ~1 credit vs 5+ for a domain-only scan.
+
+    2.  Domain-only fallback — when no named owner is known, search by domain
+        for C-suite/owner titles.
+        Same endpoint: POST /api/v1/people/search
+
+    403 handling — IMPORTANT:
+    A 403 from Apollo on the free plan means "this feature is not available on
+    your plan", NOT that the API key is invalid.  We must NOT mark the key as
+    exhausted — all three keys share the same plan restriction.  We simply return
+    an empty list and move on.
+    """
+
     def __init__(self, db_session: Optional[Session] = None):
         self.base_url = "https://api.apollo.io/api/v1"
         self.db = db_session
         self.pool = ApolloProviderPool(self.db) if self.db else None
 
     async def _get_api_key(self) -> tuple[Optional[str], Optional[ProviderAccount]]:
-        """Get key from pool or fallback to environment."""
+        """Get API key from pool (LRU rotation) or env fallback."""
         if self.pool:
             account = self.pool._get_active_account()
-            if account and account.api_key_ref:
-                # In production, api_key_ref might be an AWS Secret ARN or the actual key.
-                # For this MVP, we treat it as the raw key or env var name
-                key = os.environ.get(account.api_key_ref, account.api_key_ref)
-                return key, account
-                
-        # Fallback
-        return os.environ.get("APOLLO_API_KEY", "FUc0sLL0bqT181HhTUm0WQ"), None
+            if account:
+                return account.api_key_ref, account
+        env_key = os.environ.get("APOLLO_API_KEY", "").strip()
+        return (env_key or None, None)
 
-    @staticmethod
-    def _contact_from_person(person: Dict[str, Any]) -> Dict[str, Any]:
-        """Map returned Apollo facts to the CRM contact shape."""
-        if isinstance(person.get("person"), dict):
-            person = person["person"]
+    @classmethod
+    def _contact_from_person(cls, person: Dict[str, Any]) -> Dict[str, Any]:
         phone_numbers = person.get("phone_numbers") or []
         if isinstance(phone_numbers, dict):
             phone_numbers = [phone_numbers]
@@ -94,7 +96,7 @@ class ApolloProvider(EmailProvider):
             "last_name": person.get("last_name"),
             "title": person.get("title") or person.get("headline"),
             "phone": person.get("phone") or first_phone.get("sanitized_number") or first_phone.get("raw_number"),
-            "mobile": person.get("mobile_phone") or first_phone.get("sanitized_number") or first_phone.get("raw_number"),
+            "mobile": person.get("mobile_phone") or first_phone.get("sanitized_number"),
             "linkedin_url": person.get("linkedin_url"),
             "contact_type": "professional",
             "verification_status": "verified" if person.get("email_status") == "verified" else "unknown",
@@ -102,116 +104,155 @@ class ApolloProvider(EmailProvider):
             "source": "apollo",
         }
 
-    async def _handle_error(self, response: aiohttp.ClientResponse, account: Optional[ProviderAccount]) -> List[Dict[str, Any]]:
-        details = (await response.text())[:300]
-        if response.status == 429:
-            print("ApolloProvider: Rate Limit Hit (429). Initiating cooldown.")
-            if self.pool and account:
-                self.pool._mark_cooldown(account, minutes=60)
-        elif response.status in (401, 403):
-            print(f"ApolloProvider: Auth or API-scope error {response.status}. {details}")
-            if self.pool and account:
-                account.status = "exhausted"
-                self.db.commit()
-        else:
-            print(f"Apollo API error: {response.status} {details}")
-        return []
+    @classmethod
+    def _contacts_from_people(cls, people: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        contacts: List[Dict[str, Any]] = []
+        seen: set = set()
+        for person in people:
+            raw = person.get("person") if isinstance(person.get("person"), dict) else person
+            base = cls._contact_from_person(raw)
+            emails = []
+            primary = (raw.get("email") or "").strip().lower()
+            if primary:
+                emails.append((primary, "professional"))
+            for pe in raw.get("personal_emails") or []:
+                e = (pe or "").strip().lower()
+                if e:
+                    emails.append((e, "personal"))
+            if not emails:
+                key = (base.get("first_name"), base.get("last_name"), base.get("linkedin_url"))
+                if key not in seen:
+                    seen.add(key)
+                    contacts.append(base)
+                continue
+            for email, ctype in emails:
+                key = (email, base.get("first_name"), base.get("last_name"))
+                if key not in seen:
+                    seen.add(key)
+                    c = dict(base)
+                    c["email"] = email
+                    c["contact_type"] = ctype
+                    contacts.append(c)
+        return contacts
 
-    async def find_emails(self, domain: str, name: Optional[str] = None, business_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Find decision-maker contacts via Apollo.
-
-        Strategy:
-        1. Try the free-plan endpoint (/mixed_people/search, POST JSON).
-           Returns name, title, email (if plan reveals it), LinkedIn URL.
-        2. If the account has Bulk People Enrichment scope, follow up with
-           /people/bulk_match to get richer email/phone data.
-        Both calls fall back gracefully on 403 (plan restriction).
-        """
-        api_key, account = await self._get_api_key()
-
-        if not api_key:
-            print("ApolloProvider: No API key configured. Skipping enrichment.")
-            return []
-
+    async def _do_search(
+        self,
+        session: aiohttp.ClientSession,
+        payload: Dict[str, Any],
+        api_key: str,
+        account: Optional[ProviderAccount],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Execute a /people/search call. None means retry with another account."""
         headers = {
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",
             "Accept": "application/json",
             "X-Api-Key": api_key,
         }
+        try:
+            async with session.post(
+                f"{self.base_url}/people/search",
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if self.pool and account:
+                        self.pool._increment_usage(account)
+                    return data.get("people", [])[:5]
 
+                elif response.status == 429:
+                    print("ApolloProvider: Rate limited (429). Entering 60-min cooldown.")
+                    if self.pool and account:
+                        self.pool._mark_cooldown(account, minutes=60)
+                    return None
+
+                elif response.status in (401,):
+                    # Genuine auth failure — key is bad, mark exhausted
+                    details = (await response.text())[:200]
+                    print(f"ApolloProvider: Auth error 401. Key invalid. {details}")
+                    if self.pool and account:
+                        self.pool._mark_exhausted(account)
+                    return None
+
+                elif response.status == 403:
+                    # Plan restriction — NOT a key error. All keys share the same plan.
+                    # Do NOT mark exhausted. Just skip gracefully.
+                    details = (await response.text())[:200]
+                    print(f"ApolloProvider: 403 plan restriction (not an auth failure). {details}")
+                    return []
+
+                else:
+                    details = (await response.text())[:200]
+                    print(f"ApolloProvider: Unexpected {response.status}. {details}")
+                    return []
+
+        except Exception as exc:
+            print(f"ApolloProvider: Request error — {exc}")
+            return []
+
+    async def find_email_by_name(
+        self,
+        first_name: str,
+        last_name: str,
+        domain: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        TARGETED lookup: search for a specific named person at a domain.
+        Uses ~1 Apollo credit. Preferred path when Serper found the owner name.
+        """
+        api_key, account = await self._get_api_key()
+        if not api_key:
+            return []
+
+        payload = {
+            "q_organization_domains": [domain],
+            "q_keywords": f"{first_name} {last_name}",
+            "per_page": 3,
+        }
+        async with aiohttp.ClientSession() as session:
+            for _ in range(3):
+                people = await self._do_search(session, payload, api_key, account)
+                if people is not None:
+                    return self._contacts_from_people(people)
+                api_key, account = await self._get_api_key()
+                if not api_key:
+                    return []
+        return []
+
+    async def find_emails(
+        self,
+        domain: str,
+        name: Optional[str] = None,
+        business_id: Optional[int] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Domain-level enrichment fallback (no named owner known).
+        Searches for C-suite / owner titles at the domain.
+        """
         payload: Dict[str, Any] = {
             "q_organization_domains": [domain],
-            "person_titles": ["owner", "founder", "ceo", "president", "managing director"],
-            "person_seniorities": ["c_suite", "owner"],
+            "person_titles": ["owner", "founder", "ceo", "president", "managing director", "principal"],
+            "person_seniorities": ["c_suite", "owner", "founder"],
             "per_page": 5,
         }
         if name:
             payload["q_keywords"] = name
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                # ── Step 1: People Search (free plan) ─────────────────────
-                async with session.post(
-                    f"{self.base_url}/mixed_people/search",
-                    headers=headers,
-                    json=payload,
-                ) as response:
-                    if response.status == 403:
-                        details = (await response.text())[:400]
-                        print(f"ApolloProvider: Search 403 — key lacks scope or is invalid. {details}")
-                        return []
-                    if response.status != 200:
-                        return await self._handle_error(response, account)
+        # If caller already has a name, use the targeted path
+        if first_name and last_name:
+            return await self.find_email_by_name(first_name, last_name, domain)
 
-                    data = await response.json()
-                    people = data.get("people", [])[:5]
-
-                if not people:
+        async with aiohttp.ClientSession() as session:
+            for _ in range(3):
+                api_key, account = await self._get_api_key()
+                if not api_key:
+                    print("ApolloProvider: No API key configured. Skipping enrichment.")
                     return []
-
-                # If the search already returned emails (some plans do), use them.
-                has_emails = any(p.get("email") for p in people)
-
-                if has_emails:
-                    if self.pool and account:
-                        self.pool._increment_usage(account)
-                    return [self._contact_from_person(p) for p in people]
-
-                # ── Step 2: Bulk Enrichment (paid plan, optional) ──────────
-                # Try to enrich via bulk_match to get work emails.  If the plan
-                # doesn't include this endpoint we fall back to whatever the
-                # search gave us (name + title + LinkedIn).
-                person_ids = [p.get("id") for p in people if p.get("id")]
-                if not person_ids:
-                    return [self._contact_from_person(p) for p in people]
-
-                enrich_payload = {
-                    "details": [{"id": pid} for pid in person_ids],
-                    "reveal_personal_emails": os.environ.get("APOLLO_REVEAL_PERSONAL_EMAILS", "false").lower() == "true",
-                }
-                async with session.post(
-                    f"{self.base_url}/people/bulk_match",
-                    headers=headers,
-                    json=enrich_payload,
-                ) as enrich_resp:
-                    if enrich_resp.status == 403:
-                        # Paid scope not available — use search-only results
-                        print("ApolloProvider: Bulk enrichment 403 (paid scope). Using search-only results (name/title/LinkedIn).")
-                        if self.pool and account:
-                            self.pool._increment_usage(account)
-                        return [self._contact_from_person(p) for p in people]
-                    if enrich_resp.status != 200:
-                        await self._handle_error(enrich_resp, account)
-                        # Still return whatever the search gave us
-                        return [self._contact_from_person(p) for p in people]
-
-                    enrich_data = await enrich_resp.json()
-                    matches = enrich_data.get("matches") or enrich_data.get("people") or []
-                    if self.pool and account:
-                        self.pool._increment_usage(account)
-                    return [self._contact_from_person(m) for m in matches] if matches else [self._contact_from_person(p) for p in people]
-
-        except Exception as exc:
-            print(f"ApolloProvider: Unexpected error — {exc}")
-            return []
+                people = await self._do_search(session, payload, api_key, account)
+                if people is not None:
+                    return self._contacts_from_people(people)
+        return []

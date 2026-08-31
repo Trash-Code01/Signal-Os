@@ -33,10 +33,11 @@ from core.models import (
 )
 from engines.scoring import ScoringEngine
 from engines.website_intelligence import WebsiteIntelligenceEngine
-from providers.apollo_provider import ApolloProvider
+from providers.snovio_provider import SnovioProvider
 from providers.discovery_factory import get_discovery_provider
-from providers.gemini_provider import GeminiProvider
+from providers.groq_provider import GroqProvider
 from providers.hunter_provider import HunterProvider
+from providers.proxycurl_provider import ProxycurlProvider
 
 
 redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
@@ -52,11 +53,20 @@ celery_app.conf.update(
 
 
 def _location_label(location: CampaignLocation) -> str:
-    return ", ".join(
-        part.strip()
-        for part in [location.city, location.region_state, location.country]
-        if part and part.strip()
-    )
+    """Build a clean location string for discovery queries.
+    
+    For non-US/Canada countries, state/province is omitted to avoid polluting
+    the query (e.g. a state left over from a previous USA campaign).
+    """
+    country = (location.country or "").strip()
+    city = (location.city or "").strip()
+    state = (location.region_state or "").strip()
+    
+    # Only include state for countries where it disambiguates (USA, Canada)
+    include_state = bool(state) and country in {"USA", "Canada", "US"}
+    
+    parts = [p for p in [city, state if include_state else None, country] if p]
+    return ", ".join(parts)
 
 
 def _domain(url: Optional[str]) -> Optional[str]:
@@ -78,6 +88,21 @@ def _page_type(url: str) -> str:
         return "about"
     return "homepage"
 
+
+
+def _set_business_status(db, business, status: str):
+    business.status = status
+    crm = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
+    if not crm:
+        crm = CRMLead(business_id=business.id, source="campaign")
+        db.add(crm)
+    if status == "qualified":
+        crm.stage = "qualified"
+    elif status in ["needs_research", "needs_official_website", "needs_contact_enrichment", "researching"]:
+        crm.stage = "needs_review"
+    elif status in ["rejected_unreachable", "below_quality_threshold"]:
+        crm.stage = "archived"
+    db.flush()
 
 def _existing_business(db, data: Dict[str, Any]) -> Optional[Business]:
     place_id = data.get("google_place_id")
@@ -130,14 +155,19 @@ def _save_contact(db, business_id: int, data: Dict[str, Any]) -> bool:
             if not c.first_name or not c.last_name:
                 continue
             c_name = f"{c.first_name} {c.last_name}".strip().lower()
-            if c_name == full_name:
+            if c_name == full_name and (not email or not c.email or c.email.lower() == email):
                 # If titles exist, maybe verify they are somewhat similar or just trust the name match
                 match = c
                 break
                 
-    # 4. Match by direct phone
+    # 4. Match by direct phone. Do not collapse separate inboxes merely
+    # because they share the same company phone number.
     if not match and phone:
-        match = next((c for c in existing_contacts if (c.phone and c.phone == phone) or (c.mobile and c.mobile == phone)), None)
+        match = next((
+            c for c in existing_contacts
+            if ((c.phone and c.phone == phone) or (c.mobile and c.mobile == phone))
+            and (not email or not c.email or c.email.lower() == email)
+        ), None)
         
     source = data.get("source") or "unknown"
     source_url = data.get("source_url") or None
@@ -157,6 +187,9 @@ def _save_contact(db, business_id: int, data: Dict[str, Any]) -> bool:
         if first_name and not match.first_name:
             match.first_name = first_name
             match.last_name = last_name
+            updated = True
+        if title and not match.title:
+            match.title = title
             updated = True
         if source_url and not match.source_url:
             match.source_url = source_url
@@ -186,11 +219,59 @@ def _save_contact(db, business_id: int, data: Dict[str, Any]) -> bool:
     return True
 
 
+def _contact_source_url(audit: Dict[str, Any]) -> Optional[str]:
+    pages = audit.get("pages_checked") or []
+    if not pages:
+        return None
+    prioritized_terms = ("contact", "about", "team", "staff", "leadership")
+    return next((url for url in pages if any(term in (url or "").lower() for term in prioritized_terms)), pages[0])
+
+
+def _save_public_website_contacts(db, business: Business, audit: Dict[str, Any]) -> int:
+    """Persist every public email/phone found by the website crawler."""
+    source_url = _contact_source_url(audit)
+    public_emails = sorted({email.lower().strip() for email in audit.get("emails") or [] if email})
+    public_phones = sorted({phone.strip() for phone in audit.get("phones") or [] if phone})
+
+    if not business.primary_phone and public_phones:
+        business.primary_phone = public_phones[0]
+
+    saved = 0
+    shared_phone = business.primary_phone or (public_phones[0] if public_phones else None)
+    for email in public_emails:
+        saved += int(_save_contact(db, business.id, {
+            "email": email,
+            "phone": shared_phone,
+            "title": "Website email",
+            "contact_type": "company",
+            "verification_status": "unknown",
+            "confidence": 1.0,
+            "source": "website_crawl",
+            "source_url": source_url,
+        }))
+
+    if not public_emails:
+        for phone_value in public_phones:
+            saved += int(_save_contact(db, business.id, {
+                "phone": phone_value,
+                "title": "Website phone",
+                "contact_type": "company",
+                "verification_status": "unknown",
+                "confidence": 1.0,
+                "source": "website_crawl",
+                "source_url": source_url,
+            }))
+
+    db.flush()
+    return saved
+
+
 def _has_actionable_contact(db, business: Business) -> bool:
+    """A lead is actionable if we have an email OR a phone number — not both required."""
     contacts = db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all()
     has_email = any(contact.email for contact in contacts)
     has_phone = bool(business.primary_phone) or any(contact.phone or contact.mobile for contact in contacts)
-    return has_email and has_phone
+    return has_email or has_phone
 
 
 def _persist_website_research(db, business: Business, audit: Dict[str, Any]) -> tuple[Website, List[Dict[str, Any]]]:
@@ -248,22 +329,30 @@ def _persist_website_research(db, business: Business, audit: Dict[str, Any]) -> 
 
     evidence_records: List[Dict[str, Any]] = []
     for evidence in audit.get("evidence") or []:
-        page_url = evidence.get("page_url")
-        finding = evidence.get("evidence_text") or ""
+        page_url = evidence.get("url")
+        finding = evidence.get("content") or evidence.get("context") or ""
         if not finding:
             continue
         db.add(WebsiteEvidence(
             business_id=business.id,
-            evidence_type=evidence.get("source_type") or "website_crawl",
+            evidence_type=evidence.get("type") or "website_crawl",
             finding=finding,
             confidence=evidence.get("confidence") or 0.75,
             source_page_id=page_map.get(page_url) if page_url else None,
         ))
         evidence_records.append({
-            "type": evidence.get("source_type") or "website_crawl",
+            "type": evidence.get("type") or "website_crawl",
             "finding": finding,
             "confidence": evidence.get("confidence") or 0.75,
             "source_url": page_url,
+        })
+        
+    if not evidence_records:
+        evidence_records.append({
+            "type": "website_crawl",
+            "finding": "Website is live and functional. Standard forms and CTAs appear to be present. Needs deeper analysis of messaging or performance.",
+            "confidence": 1.0,
+            "source_url": business.website_url,
         })
     if screenshot_id:
         db.add(WebsiteEvidence(
@@ -309,13 +398,14 @@ def enrich_lead_contacts_task(business_id: int):
         except Exception as e:
             print(f"Crawler timeout/error on refresh for {business.website_url}: {e}")
             audit = {"social_profiles": [], "public_people": []}
-            
+
         social_count = _save_social_profiles(db, business, audit.get("social_profiles") or [])
-        
+        website_contact_count = _save_public_website_contacts(db, business, audit)
+
         # 1. Save public people found on the website
         public_people = audit.get("public_people") or []
-        website_contact_count = sum(int(_save_contact(db, business.id, person)) for person in public_people)
-        
+        website_contact_count += sum(int(_save_contact(db, business.id, person)) for person in public_people)
+
         # 2. Serper Google-result fallback if no named professional exists.
         serper_count = 0
         from providers.serper_search_provider import SerperSearchProvider
@@ -325,20 +415,14 @@ def enrich_lead_contacts_task(business_id: int):
         if not existing_professionals:
             serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city))
             serper_count = sum(int(_save_contact(db, business.id, contact)) for contact in serper_contacts)
-            
-        # 3. Apollo Premium Enrichment
-        domain = _domain(business.website_url)
-        contacts = asyncio.run(ApolloProvider(db_session=db).find_emails(
-            domain=domain,
-            name=business.name
-        )) if domain else []
-        apollo_count = sum(int(_save_contact(db, business.id, contact)) for contact in contacts)
+
         
-        total_contacts = website_contact_count + serper_count + apollo_count
+
+        total_contacts = website_contact_count + serper_count
         db.add(CRMActivity(
             business_id=business.id,
             activity_type="enrichment",
-            body=f"Contact research completed: {total_contacts} public decision makers found ({website_contact_count} from website, {serper_count} from Google web search, {apollo_count} from Apollo) and {social_count} social profiles added.",
+            body=f"Contact research completed: {total_contacts} contacts found ({website_contact_count} from website, {serper_count} from Google web search) and {social_count} social profiles added.",
             created_by="Lead Intelligence",
         ))
         db.commit()
@@ -462,8 +546,12 @@ def process_campaign_task(campaign_id: int):
                 continue
             existing = _existing_business(db, raw)
             if existing:
-                # Existing candidates are loaded above. Test records are never
-                # eligible to re-enter the live pipeline.
+                if existing.campaign_id == campaign_id:
+                    continue
+                existing.campaign_id = campaign_id
+                existing.status = 'researching'
+                db.flush()
+                saved_businesses.append(existing)
                 continue
             business = Business(
                 campaign_id=campaign_id,
@@ -498,48 +586,105 @@ def process_campaign_task(campaign_id: int):
 
         crawler = WebsiteIntelligenceEngine()
         scorer = ScoringEngine(industry_config)
-        gemini = GeminiProvider()
+        ai_sdr = GroqProvider()
         hunter = HunterProvider()
-        apollo = ApolloProvider(db_session=db)
+        proxycurl = ProxycurlProvider()
+        snovio = SnovioProvider(db_session=db)
         qualified_count = 0
         audited_count = 0
         enriched_count = 0
 
         for business in saved_businesses:
             if not business.website_url:
-                business.status = "rejected_no_website"
+                # Auto-qualify businesses without a website as high-value web design leads
+                
+                # Clean up old records before creating new ones on a re-run
+                db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
+                db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
+                db.query(Score).filter(Score.business_id == business.id).delete()
+                
+                opportunity = Opportunity(
+                    business_id=business.id,
+                    primary_problem="No digital presence / Missing website",
+                    recommended_offer=f"Full website design and digital presence setup",
+                    ticket_low=2000,
+                    ticket_high=5000,
+                    outreach_angle=f"I noticed {business.name} doesn't have a website. This is costing you local customers."
+                )
+                db.add(opportunity)
+                db.flush()
+                
+                db.add(Score(
+                    business_id=business.id,
+                    commercial_score=100,
+                    data_confidence=100,
+                    grade="A+",
+                    business_fit=100,
+                    digital_gap=100,
+                    offer_fit=100,
+                    buying_intent=100,
+                    contactability=50
+                ))
+                
+                db.add(AIAnalysis(
+                    business_id=business.id,
+                    opportunity_id=opportunity.id,
+                    model_name="deterministic_rule",
+                    prompt_template="no_website_rule",
+                    parsed_output={"confidence": "high", "primary_problem": "No website"}
+                ))
+                
+                _set_business_status(db, business, "qualified")
+                crm_lead = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
+                if not crm_lead:
+                    db.add(CRMLead(business_id=business.id, stage="qualified", source="campaign"))
+                db.add(CRMActivity(
+                    business_id=business.id,
+                    activity_type="qualified",
+                    body="Auto-qualified: Business has no website. High value lead for web design."
+                ))
                 db.commit()
+                qualified_count += 1
+                
+                # Google Search fallback for No Website
+                from providers.serper_search_provider import SerperSearchProvider
+                serper_search = SerperSearchProvider()
+                search_results = asyncio.run(serper_search.search_decision_makers(business.name, business.city))
+                if search_results:
+                    for contact in search_results:
+                        contact["source"] = "google_search_fallback"
+                        _save_contact(db, business.id, contact)
+                
                 continue
 
             try:
+                # Guard: if the URL is a directory/Wikipedia/chain HQ, treat as no-website
+                from providers.serper_discovery_provider import _is_junk_website
+                if _is_junk_website(business.website_url):
+                    print(f"Skipping junk website for {business.name}: {business.website_url}")
+                    business.website_url = None
+                    db.commit()
+                    # Fall through to no-website branch on next iteration (re-queue)
+                    _set_business_status(db, business, "researching")
+                    db.commit()
+                    continue
+
                 audit = asyncio.run(asyncio.wait_for(crawler.audit_website(business.website_url), timeout=240.0))
             except Exception as e:
                 print(f"Crawler timeout/error for {business.website_url}: {e}")
-                business.status = "rejected_unreachable"
+                _set_business_status(db, business, "rejected_unreachable")
                 db.commit()
                 continue
 
             _, evidence = _persist_website_research(db, business, audit)
             audited_count += 1
             if not audit.get("is_live"):
-                business.status = "rejected_unreachable"
+                _set_business_status(db, business, "rejected_unreachable")
                 db.commit()
                 continue
 
             public_emails = sorted({email.lower().strip() for email in audit.get("emails") or [] if email})
-            public_phones = sorted({phone.strip() for phone in audit.get("phones") or [] if phone})
-            if not business.primary_phone and public_phones:
-                business.primary_phone = public_phones[0]
-            for email in public_emails:
-                _save_contact(db, business.id, {
-                    "email": email,
-                    "phone": business.primary_phone,
-                    "title": "Website email",
-                    "contact_type": "company",
-                    "verification_status": "unknown",
-                    "confidence": 1.0,
-                    "source": "website_crawl",
-                })
+            _save_public_website_contacts(db, business, audit)
 
             score_result = scorer.calculate_score({
                 "primary_phone": business.primary_phone,
@@ -563,7 +708,7 @@ def process_campaign_task(campaign_id: int):
             db.commit()
 
             if score.commercial_score < quality_threshold:
-                business.status = "below_quality_threshold"
+                _set_business_status(db, business, "below_quality_threshold")
                 db.commit()
                 continue
 
@@ -580,45 +725,44 @@ def process_campaign_task(campaign_id: int):
                 from providers.serper_search_provider import SerperSearchProvider
                 existing_professionals = [c for c in db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all() if c.contact_type == 'professional' and c.first_name and c.last_name]
                 if not existing_professionals:
-                    serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city))
+                    serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city, domain))
                     provider_contacts.extend(serper_contacts)
                 
-                # 3. Apollo Premium Enrichment
-                # Apollo is the decision-maker source. Always run it alongside
-                # Hunter so a generic website inbox never prevents us from
-                # finding the owner's name, title, work email, or LinkedIn.
+                
                 provider_contacts.extend(asyncio.run(
-                    apollo.find_emails(domain=domain, name=business.name, business_id=business.id)
+                    snovio.find_emails(domain=domain, name=business.name)
+                ))
+                provider_contacts.extend(asyncio.run(
+                    proxycurl.get_executives(domain=domain)
                 ))
                 for contact in provider_contacts:
                     enriched_count += int(_save_contact(db, business.id, contact))
                 db.commit()
 
-            diagnosis = asyncio.run(gemini.analyze(evidence, industry_config))
-            # If Gemini is rate-limited or unavailable, generate a fallback diagnosis
-            # based on the deterministic score so the lead is never silently dropped.
+            diagnosis = asyncio.run(ai_sdr.analyze(evidence, industry_config))
+            # If AI is unavailable, do not fabricate a personalized diagnosis.
             if not diagnosis or diagnosis.get("confidence") not in {"high", "medium"}:
-                diagnosis = {
-                    "primary_problem": "Website and digital presence needs analysis",
-                    "problems": ["Identified as high-value prospect via scoring engine"],
-                    "recommended_offer": f"Digital audit and outreach for {industry_config.get('industry', 'target')} business",
-                    "ticket_low": 1500,
-                    "ticket_high": 5000,
-                    "outreach_angle": "Score-based qualification — AI analysis pending",
-                    "ai_reasoning": f"Auto-qualified based on commercial score of {score.commercial_score}. Gemini analysis unavailable (rate limit). Review manually.",
-                    "confidence": "medium",
-                }
+                _set_business_status(db, business, "needs_research")
+                db.commit()
+                continue
 
             # Contact gate: qualify even without an Apollo/Hunter contact if
             # the website crawl or DataForSEO provided a phone number.
             if not _has_actionable_contact(db, business):
                 if not business.primary_phone:
-                    business.status = "needs_contact_enrichment"
+                    _set_business_status(db, business, "needs_contact_enrichment")
                     db.commit()
                     continue
                 # Phone from DataForSEO / crawler is enough to qualify
 
+
+            # Clean up old records before creating new ones on a re-run
+            db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
+            db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
+            db.query(Score).filter(Score.business_id == business.id).delete()
+            
             opportunity = Opportunity(
+
                 business_id=business.id,
                 primary_problem=diagnosis["primary_problem"],
                 problems=diagnosis["problems"],
@@ -634,11 +778,11 @@ def process_campaign_task(campaign_id: int):
             db.add(AIAnalysis(
                 business_id=business.id,
                 opportunity_id=opportunity.id,
-                model_name=gemini.model_name,
+                model_name=ai_sdr.model_name,
                 prompt_template="research_gated_website_evidence",
                 parsed_output=diagnosis,
             ))
-            business.status = "qualified"
+            _set_business_status(db, business, "qualified")
             crm_lead = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
             if not crm_lead:
                 db.add(CRMLead(business_id=business.id, stage="qualified", source="campaign"))

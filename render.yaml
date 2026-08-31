@@ -1,13 +1,12 @@
-services:
-  # 1. FastAPI Web Service (Also runs the Celery worker in the background for Free tier)
+﻿services:
+  # 1. FastAPI + Celery Backend (Docker)
   - type: web
     name: devacia-api
-    env: python
+    env: docker
     rootDir: apps/api
     plan: free
     region: ohio
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "bash start.sh"
+    dockerCommand: "bash start.sh"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -20,24 +19,38 @@ services:
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
       - key: DISCOVERY_MODE
         value: live
-      - key: GEMINI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
-      - key: DATAFORSEO_USERNAME
-        sync: false
-      - key: DATAFORSEO_PASSWORD
+      - key: SERPER_API_KEY
         sync: false
       - key: HUNTER_API_KEY
         sync: false
-      - key: APOLLO_API_KEY
+      - key: SNOVIO_CLIENT_ID
         sync: false
-      - key: PAGESPEED_API_KEY
+      - key: SNOVIO_CLIENT_SECRET
         sync: false
-      - key: BRAVE_SEARCH_API_KEY
+      - key: PROXYCURL_API_KEY
         sync: false
 
-  # 2. Redis Memory Cache
+  # 2. Next.js Frontend (Docker)
+  - type: web
+    name: devacia-web
+    env: docker
+    rootDir: apps/web
+    plan: free
+    region: ohio
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: devacia-api
+          envVarKey: RENDER_EXTERNAL_URL
+
+  # 3. Redis Memory Cache
   - type: redis
     name: devacia-redis
     plan: free
@@ -45,7 +58,7 @@ services:
     ipAllowList: []
 
 databases:
-  # 3. PostgreSQL Database
+  # 4. PostgreSQL Database
   - name: devacia-db
     databaseName: devacia_os
     user: devacia

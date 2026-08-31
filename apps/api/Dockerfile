@@ -1,5 +1,5 @@
-# Use official Playwright Python image which has all dependencies pre-installed
-FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
+# Use standard python image since we removed Playwright
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
@@ -7,12 +7,12 @@ ENV PYTHONUNBUFFERED 1
 
 WORKDIR /app
 
+# Install system dependencies if any are needed for other packages
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Playwright browsers are already installed in this image, but we can ensure chromium is linked
-RUN playwright install chromium
 
 # Copy the rest of the application
 COPY . .

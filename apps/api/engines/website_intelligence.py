@@ -4,7 +4,7 @@ import re
 import urllib.parse
 import aiohttp
 from bs4 import BeautifulSoup
-from typing import Dict, Any, List, Set, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 class WebsiteIntelligenceEngine:
     """
@@ -40,7 +40,7 @@ class WebsiteIntelligenceEngine:
             "technology_stack": set(),
             "booking_detected": False,
             "ecommerce_detected": False,
-            "mobile_responsive": True, # Assume true for static fallback
+            "mobile_responsive": False, # Will detect below
             "contact_form": False,
             "quote_form": False,
             "phone_cta": False,
@@ -74,7 +74,7 @@ class WebsiteIntelligenceEngine:
                     print(f"[Crawler] Fetching {pages_crawled}/{self.max_pages}: {current_url}")
                     
                     try:
-                        async with session.get(current_url, ssl=False) as response:
+                        async with session.get(current_url, ssl=False, allow_redirects=True) as response:
                             if response.status >= 400:
                                 continue
                             
@@ -150,6 +150,10 @@ class WebsiteIntelligenceEngine:
         html_lower = html.lower()
         text_lower = text.lower()
         
+        # Responsive detection
+        if 'name="viewport"' in html_lower or '@media' in html_lower or 'bootstrap' in html_lower or 'tailwind' in html_lower:
+            findings["mobile_responsive"] = True
+        
         # Technology Stack
         if "wordpress" in html_lower or "wp-content" in html_lower: findings["technology_stack"].add("WordPress")
         if "shopify" in html_lower or "cdn.shopify" in html_lower:
@@ -197,18 +201,14 @@ class WebsiteIntelligenceEngine:
                     findings["social_profiles"].setdefault(platform, a['href'])
 
         # Team/People Extraction (Heuristics)
-        # Look for "Dr.", "CEO", "Founder"
+        # Look for visible owner/leadership snippets on contact/about/team pages.
         for p in soup.find_all(['p', 'h2', 'h3', 'h4', 'div']):
             content = p.get_text(strip=True)
             if any(title in content for title in ["CEO", "Founder", "Owner", "Director", "Dr.", "Doctor", "Manager"]):
-                # Simple extraction, just pass context to AI
-                if len(content) < 100:
-                    key = content[:50]
-                    findings["public_people"][key] = {
-                        "name": content,
-                        "title": content,
-                        "linkedin": None
-                    }
+                person = self._extract_public_person(content, url)
+                if person:
+                    key = f"{person['first_name']} {person['last_name']}".lower()
+                    findings["public_people"][key] = person
 
         # Forms
         forms = soup.find_all('form')
@@ -233,3 +233,55 @@ class WebsiteIntelligenceEngine:
                 findings["quote_form"] = True
             if 'call' in btn_text or 'schedule' in btn_text:
                 findings["phone_cta"] = True
+
+    def _extract_public_person(self, content: str, url: str) -> Optional[Dict[str, Any]]:
+        """Extract a conservative name/title pair from short public page snippets."""
+        text = re.sub(r'\s+', ' ', content or '').strip()
+        if not text or len(text) > 160:
+            return None
+
+        titles = [
+            "Owner",
+            "Founder",
+            "Co-Founder",
+            "CEO",
+            "President",
+            "Director",
+            "Managing Director",
+            "General Manager",
+            "Manager",
+            "Doctor",
+            "Dr.",
+        ]
+        title = next((item for item in titles if re.search(rf'\b{re.escape(item)}\b', text, re.IGNORECASE)), None)
+        if not title:
+            return None
+
+        lower_text = text.lower()
+        title_index = lower_text.find(title.lower())
+        candidate_parts = []
+        if title_index > 0:
+            candidate_parts.append(text[:title_index])
+        if title_index >= 0:
+            candidate_parts.append(text[title_index + len(title):])
+        candidate_parts.append(text)
+
+        ignored = {item.lower().replace(".", "") for item in titles}
+        ignored.update({"and", "the", "team", "our", "staff", "contact"})
+        for part in candidate_parts:
+            words = re.findall(r"[A-Z][A-Za-z'.-]+", part)
+            words = [word.strip(".,:;|-") for word in words if word.strip(".,:;|-").lower().replace(".", "") not in ignored]
+            if len(words) >= 2:
+                return {
+                    "first_name": words[0],
+                    "last_name": words[-1],
+                    "title": title.replace("Dr.", "Doctor"),
+                    "linkedin_url": None,
+                    "contact_type": "professional",
+                    "verification_status": "unknown",
+                    "confidence": 0.65,
+                    "source": "website_crawl",
+                    "source_url": url,
+                }
+
+        return None

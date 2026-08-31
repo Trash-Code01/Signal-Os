@@ -27,7 +27,7 @@ const PIPELINE_STAGES: Stage[] = [
 
 function StatusIcon({ status }: { status: StageStatus }) {
   if (status === 'done') return <span className="text-green-500 text-lg">✓</span>;
-  if (status === 'failed') return <span className="text-red-500 text-lg">✔</span>;
+  if (status === 'failed') return <span className="text-red-500 text-lg">!</span>;
   if (status === 'running') return <span className="w-4 h-4 border-2 border-[#8b5cf6]/30 border-t-[#8b5cf6] rounded-full animate-spin inline-block"></span>;
   return <span className="w-4 h-4 rounded-full border border-zinc-700 inline-block"></span>;
 }
@@ -48,7 +48,9 @@ function JobsContent() {
   const searchParams = useSearchParams();
   const campaignId = searchParams.get('campaign');
   const [stages, setStages] = useState<Stage[]>(PIPELINE_STAGES);
-  const [stats, setStats] = useState({ discovered: 0, qualified: 0, enriched: 0, elapsed: 0 });
+  const [stats, setStats] = useState({ discovered: 0, qualified: 0, enriched: 0, needs_review: 0, rejected: 0, target: 0, elapsed: 0 });
+  const [campaignStatus, setCampaignStatus] = useState('processing');
+  const [summary, setSummary] = useState('');
 
   useEffect(() => {
     if (!campaignId) return;
@@ -62,18 +64,23 @@ function JobsContent() {
     // Poll API
     const fetchStatus = async () => {
       try {
-        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+        const apiUrl = "";
         const res = await fetch(`${apiUrl}/api/campaigns/${campaignId}/status`);
         if (res.ok) {
           const data = await res.json();
           setStages(data.stages);
+          setCampaignStatus(data.status || 'processing');
+          setSummary(data.summary || '');
           setStats(s => ({ 
             ...s, 
             discovered: data.stats.discovered, 
             qualified: data.stats.qualified, 
-            enriched: data.stats.enriched 
+            enriched: data.stats.enriched,
+            needs_review: data.stats.needs_review || 0,
+            rejected: data.stats.rejected || 0,
+            target: data.stats.target || 0,
           }));
-          if (data.status === 'completed') {
+          if (data.terminal) {
             clearInterval(poller);
             clearInterval(ticker);
           }
@@ -92,9 +99,17 @@ function JobsContent() {
     };
   }, [campaignId]);
 
-  const doneCount = stages.filter(s => s.status === 'done').length;
-  const overallPct = Math.round((doneCount / stages.length) * 100);
+  const terminalCount = stages.filter(s => s.status === 'done' || s.status === 'failed').length;
+  const overallPct = Math.round((terminalCount / stages.length) * 100);
   const elapsed = `${Math.floor(stats.elapsed / 60)}m ${stats.elapsed % 60}s`;
+  const isTerminal = ['completed', 'completed_partial', 'needs_review', 'failed'].includes(campaignStatus);
+  const isGoodComplete = campaignStatus === 'completed';
+  const statusLabel = campaignStatus.replace(/_/g, ' ');
+  const progressClass = campaignStatus === 'failed'
+    ? 'bg-red-500'
+    : isTerminal && !isGoodComplete
+      ? 'bg-orange-500'
+      : 'bg-gradient-to-r from-purple-500 to-indigo-400';
 
   return (
     <div className="p-10 max-w-5xl">
@@ -114,12 +129,16 @@ function JobsContent() {
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-500">Elapsed: {elapsed}</span>
             <div className={`flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border ${
-              doneCount === stages.length
-                ? 'bg-green-500/10 text-green-500 border-green-500/30'
+              isTerminal
+                ? isGoodComplete
+                  ? 'bg-green-500/10 text-green-500 border-green-500/30'
+                  : campaignStatus === 'failed'
+                    ? 'bg-red-500/10 text-red-400 border-red-500/30'
+                    : 'bg-orange-500/10 text-orange-400 border-orange-500/30'
                 : 'bg-[#8b5cf6]/10 text-[#a78bfa] border-[#8b5cf6]/30'
             }`}>
-              <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
-              {doneCount === stages.length ? 'Complete' : 'Running'}
+              <span className={`w-2 h-2 rounded-full bg-current ${isTerminal ? '' : 'animate-pulse'}`}></span>
+              {isTerminal ? statusLabel : 'Running'}
             </div>
           </div>
         </div>
@@ -129,17 +148,20 @@ function JobsContent() {
       <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-5 mb-6">
         <div className="flex justify-between items-center mb-3">
           <span className="text-sm text-white font-medium">Overall progress</span>
-          <span className="text-sm text-zinc-400">{doneCount} / {stages.length} stages</span>
+          <span className="text-sm text-zinc-400">{terminalCount} / {stages.length} stages</span>
         </div>
         <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-purple-500 to-indigo-400 transition-all duration-700" style={{ width: `${overallPct}%` }}></div>
+          <div className={`h-full transition-all duration-700 ${progressClass}`} style={{ width: `${overallPct}%` }}></div>
         </div>
         <div className="flex justify-between mt-3 text-xs text-zinc-500">
           <span>Discovered: <span className="text-white">{stats.discovered}</span></span>
           <span>Qualified: <span className="text-green-400">{stats.qualified}</span></span>
+          <span>Review: <span className="text-orange-400">{stats.needs_review}</span></span>
+          <span>Rejected: <span className="text-red-400">{stats.rejected}</span></span>
           <span>Enriched: <span className="text-[#a78bfa]">{stats.enriched}</span></span>
           <span>{overallPct}% complete</span>
         </div>
+        {summary && <p className="mt-3 text-xs text-zinc-400">{summary}</p>}
       </div>
 
       {/* Stage list */}
@@ -173,16 +195,24 @@ function JobsContent() {
       </div>
 
       {/* Complete banner */}
-      {doneCount === stages.length && (
-        <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-5 flex items-center justify-between">
-          <div>
-            <p className="text-green-400 font-semibold">Pipeline Complete</p>
-            <p className="text-zinc-400 text-sm mt-0.5">{stats.qualified} qualified leads are ready in your CRM</p>
+      {isTerminal && (
+          <div className={`mt-12 border rounded-xl p-6 flex items-center justify-between ${
+            isGoodComplete
+              ? 'bg-green-500/10 border-green-500/20'
+              : campaignStatus === 'failed'
+                ? 'bg-red-500/10 border-red-500/20'
+                : 'bg-orange-500/10 border-orange-500/20'
+          }`}>
+            <div>
+              <p className={`${isGoodComplete ? 'text-green-400' : campaignStatus === 'failed' ? 'text-red-400' : 'text-orange-400'} font-semibold`}>
+                Pipeline {statusLabel}
+              </p>
+              <p className="text-zinc-400 text-sm mt-0.5">{summary || `${stats.qualified} qualified leads are ready in your CRM`}</p>
+            </div>
+            <a href={`/leads?campaignId=${campaignId}`} className="bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-md text-sm font-medium transition">
+              View Leads
+            </a>
           </div>
-          <a href="/leads" className="bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-md text-sm font-medium transition">
-            View Leads →
-          </a>
-        </div>
       )}
     </div>
   );
