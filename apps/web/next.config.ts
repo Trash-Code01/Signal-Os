@@ -1,9 +1,9 @@
-﻿import type { NextConfig } from "next";
+﻿import type { NextConfig } from 'next';
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  output: 'standalone',
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: `/api/:path*\,
+        destination: apiUrl + '/api/:path*',
       },
     ];
   }
