@@ -25,11 +25,16 @@ export default function LoginPage() {
       if (res.ok) {
         window.location.href = '/dashboard';
       } else {
-        const data = await res.json();
-        setError(data.detail || 'Login failed');
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          setError(data.detail || 'Login failed');
+        } catch(e) {
+          setError(`Server Error: ${res.status} ${res.statusText}. The backend might be asleep or misconfigured.`);
+        }
       }
-    } catch (err) {
-      setError('An error occurred during login');
+    } catch (err: any) {
+      setError(err.message || 'An error occurred during login');
     }
     
     setLoading(false);

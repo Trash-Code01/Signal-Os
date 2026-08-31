@@ -4,6 +4,12 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+    if (!process.env.NEXT_PUBLIC_API_URL) {
+      return NextResponse.json(
+        { detail: 'CRITICAL ERROR: NEXT_PUBLIC_API_URL is missing in Netlify Environment Variables! The app does not know where your backend is.' },
+        { status: 500 }
+      );
+    }
     
     // Call the FastAPI login endpoint
     const response = await fetch(`${apiUrl}/api/auth/login`, {
@@ -35,7 +41,7 @@ export async function POST(request: Request) {
     return res;
   } catch (error) {
     return NextResponse.json(
-      { detail: 'Internal server error' },
+      { detail: `Fetch to backend failed. Error: ${error.message || String(error)}` },
       { status: 500 }
     );
   }
