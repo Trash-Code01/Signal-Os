@@ -1,6 +1,7 @@
 ﻿import type { NextConfig } from "next";
 
-// Force rebuild to capture updated NEXT_PUBLIC_API_URL from Render dashboard
+const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
 const nextConfig: NextConfig = {
   output: "standalone",
   eslint: {
@@ -8,6 +9,14 @@ const nextConfig: NextConfig = {
   },
   typescript: {
     ignoreBuildErrors: true,
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: `/api/:path*\,
+      },
+    ];
   }
 };
 
