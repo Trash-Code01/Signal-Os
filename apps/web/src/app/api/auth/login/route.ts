@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     return res;
   } catch (error) {
     return NextResponse.json(
-      { detail: `Fetch to backend failed. Error: ${error.message || String(error)}` },
+      { detail: `Fetch to ${apiUrl}/api/auth/login failed. Error: ${error.message || String(error)}` },
       { status: 500 }
     );
   }
