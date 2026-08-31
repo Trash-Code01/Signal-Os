@@ -1,4 +1,4 @@
-import os
+﻿import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from core.database import Base, SessionLocal, engine
@@ -69,6 +69,57 @@ def seed_db():
             db.add(offer)
             
         db.commit()
+                import json
+        import os
+        from dateutil.parser import parse as parse_date
+        
+        dump_file = 'data_dump.json'
+        if os.path.exists(dump_file):
+            print("Found data_dump.json, migrating local data...")
+            with open(dump_file, 'r') as f:
+                data = json.load(f)
+            
+            from core.models import Campaign, Business, Score, Opportunity, CRMLead
+            
+            # Helper to parse dates
+            def parse_dates(row):
+                for k, v in row.items():
+                    if isinstance(v, str) and (k.endswith('_at') or k == 'created_at' or k == 'updated_at'):
+                        try:
+                            row[k] = parse_date(v)
+                        except:
+                            pass
+                return row
+            
+            if db.query(Business).count() == 0:
+                print("Inserting campaigns...")
+                for row in data.get('campaigns', []):
+                    db.add(Campaign(**parse_dates(row)))
+                db.commit()
+                
+                print("Inserting businesses...")
+                for row in data.get('businesses', []):
+                    db.add(Business(**parse_dates(row)))
+                db.commit()
+                
+                print("Inserting scores...")
+                for row in data.get('scores', []):
+                    db.add(Score(**parse_dates(row)))
+                db.commit()
+                
+                print("Inserting opportunities...")
+                for row in data.get('opportunities', []):
+                    db.add(Opportunity(**parse_dates(row)))
+                db.commit()
+                
+                print("Inserting crm_leads...")
+                for row in data.get('crm_leads', []):
+                    db.add(CRMLead(**parse_dates(row)))
+                db.commit()
+                
+                print("Data migration complete!")
+            else:
+                print("Remote database already has businesses, skipping migration to prevent duplicates.")
         print("Database seeding complete!")
         
     except Exception as e:
@@ -82,3 +133,4 @@ if __name__ == "__main__":
     if not os.environ.get("DATABASE_URL") and not engine.dialect.name == 'sqlite':
         print("Warning: Running against default Postgres, ensure it is up!")
     seed_db()
+
