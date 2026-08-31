@@ -4,12 +4,6 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-    if (!process.env.NEXT_PUBLIC_API_URL) {
-      return NextResponse.json(
-        { detail: 'CRITICAL ERROR: NEXT_PUBLIC_API_URL is missing in Netlify Environment Variables! The app does not know where your backend is.' },
-        { status: 500 }
-      );
-    }
     
     // Call the FastAPI login endpoint
     const response = await fetch(`${apiUrl}/api/auth/login`, {
@@ -18,16 +12,24 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
       return NextResponse.json(
-        { detail: errorData.detail || 'Login failed' },
+        { detail: `Backend returned invalid JSON. Status: ${response.status}. Body: ${text.substring(0, 100)}` },
+        { status: 502 }
+      );
+    }
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { detail: data.detail || 'Login failed' },
         { status: response.status }
       );
     }
 
-    const data = await response.json();
-    
     // Create response and set HttpOnly cookie
     const res = NextResponse.json({ success: true });
     res.cookies.set('access_token', data.access_token, {
@@ -39,9 +41,10 @@ export async function POST(request: Request) {
     });
 
     return res;
-  } catch (error) {
+  } catch (error: any) {
+    const msg = error ? (error.message || String(error)) : "Unknown error";
     return NextResponse.json(
-      { detail: `Fetch to ${apiUrl}/api/auth/login failed. Error: ${error.message || String(error)}` },
+      { detail: `Frontend API error: ${msg}` },
       { status: 500 }
     );
   }
