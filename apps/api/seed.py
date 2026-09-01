@@ -69,13 +69,13 @@ def seed_db():
             db.add(offer)
             
         db.commit()
-                import json
+                        import json
         import os
         from dateutil.parser import parse as parse_date
         
         dump_file = 'data_dump.json'
         if os.path.exists(dump_file):
-            print("Found data_dump.json, migrating local data...")
+            print("Found data_dump.json, forcing migration of local data...")
             with open(dump_file, 'r') as f:
                 data = json.load(f)
             
@@ -91,35 +91,40 @@ def seed_db():
                             pass
                 return row
             
-            if db.query(Business).count() == 0:
-                print("Inserting campaigns...")
-                for row in data.get('campaigns', []):
-                    db.add(Campaign(**parse_dates(row)))
-                db.commit()
-                
-                print("Inserting businesses...")
-                for row in data.get('businesses', []):
-                    db.add(Business(**parse_dates(row)))
-                db.commit()
-                
-                print("Inserting scores...")
-                for row in data.get('scores', []):
-                    db.add(Score(**parse_dates(row)))
-                db.commit()
-                
-                print("Inserting opportunities...")
-                for row in data.get('opportunities', []):
-                    db.add(Opportunity(**parse_dates(row)))
-                db.commit()
-                
-                print("Inserting crm_leads...")
-                for row in data.get('crm_leads', []):
-                    db.add(CRMLead(**parse_dates(row)))
-                db.commit()
-                
-                print("Data migration complete!")
-            else:
-                print("Remote database already has businesses, skipping migration to prevent duplicates.")
+            print("Clearing existing production data to mirror local data...")
+            db.query(CRMLead).delete()
+            db.query(Opportunity).delete()
+            db.query(Score).delete()
+            db.query(Business).delete()
+            db.query(Campaign).delete()
+            db.commit()
+            
+            print("Inserting campaigns...")
+            for row in data.get('campaigns', []):
+                db.add(Campaign(**parse_dates(row)))
+            db.commit()
+            
+            print("Inserting businesses...")
+            for row in data.get('businesses', []):
+                db.add(Business(**parse_dates(row)))
+            db.commit()
+            
+            print("Inserting scores...")
+            for row in data.get('scores', []):
+                db.add(Score(**parse_dates(row)))
+            db.commit()
+            
+            print("Inserting opportunities...")
+            for row in data.get('opportunities', []):
+                db.add(Opportunity(**parse_dates(row)))
+            db.commit()
+            
+            print("Inserting crm_leads...")
+            for row in data.get('crm_leads', []):
+                db.add(CRMLead(**parse_dates(row)))
+            db.commit()
+            
+            print("Data migration complete!")
         print("Database seeding complete!")
         
     except Exception as e:
@@ -133,4 +138,5 @@ if __name__ == "__main__":
     if not os.environ.get("DATABASE_URL") and not engine.dialect.name == 'sqlite':
         print("Warning: Running against default Postgres, ensure it is up!")
     seed_db()
+
 
