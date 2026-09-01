@@ -69,17 +69,22 @@ def seed_db():
             db.add(offer)
             
         db.commit()
-                        import json
+                                import json
         import os
         from dateutil.parser import parse as parse_date
         
         dump_file = 'data_dump.json'
         if os.path.exists(dump_file):
-            print("Found data_dump.json, forcing migration of local data...")
+            print("Found data_dump.json, force-syncing local data by dropping and recreating tables...")
             with open(dump_file, 'r') as f:
                 data = json.load(f)
             
-            from core.models import Campaign, Business, Score, Opportunity, CRMLead
+            from core.models import Campaign, Business, Score, Opportunity, CRMLead, Base
+            from core.database import engine
+            
+            print("Dropping and recreating all tables to avoid foreign key violations...")
+            Base.metadata.drop_all(bind=engine)
+            Base.metadata.create_all(bind=engine)
             
             # Helper to parse dates
             def parse_dates(row):
@@ -90,14 +95,6 @@ def seed_db():
                         except:
                             pass
                 return row
-            
-            print("Clearing existing production data to mirror local data...")
-            db.query(CRMLead).delete()
-            db.query(Opportunity).delete()
-            db.query(Score).delete()
-            db.query(Business).delete()
-            db.query(Campaign).delete()
-            db.commit()
             
             print("Inserting campaigns...")
             for row in data.get('campaigns', []):
@@ -124,7 +121,7 @@ def seed_db():
                 db.add(CRMLead(**parse_dates(row)))
             db.commit()
             
-            print("Data migration complete!")
+            print("Data migration complete! All local data is now securely in production.")
         print("Database seeding complete!")
         
     except Exception as e:
@@ -138,5 +135,6 @@ if __name__ == "__main__":
     if not os.environ.get("DATABASE_URL") and not engine.dialect.name == 'sqlite':
         print("Warning: Running against default Postgres, ensure it is up!")
     seed_db()
+
 
 

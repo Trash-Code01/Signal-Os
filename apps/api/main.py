@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
+﻿from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -1501,3 +1501,4 @@ Rules:
     db.commit()
 
     return EmailGenerateResponse(email_body=email_text, source=source)
+
