@@ -722,9 +722,9 @@ def list_crm_leads(
     page = max(page, 1)
     page_size = min(max(page_size, 1), 200)
 
-    # Default: show only qualified leads. When user filters by stage, disable qualified gate.
+    # Default: show all leads if no stage filter is provided.
     if qualified_only is None:
-        qualified_only = (stage is None) or (stage == "qualified")
+        qualified_only = False
 
     data = _get_crm_leads(
         db, q=q, status=status, stage=stage, grade=grade,
