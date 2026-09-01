@@ -749,16 +749,6 @@ def process_campaign_task(campaign_id: int):
             # We will just mark low confidence as "needs_research" after saving.
             is_low_confidence = diagnosis.get("confidence") not in {"high", "medium"}
 
-            # Contact gate: qualify even without an Apollo/Hunter contact if
-            # the website crawl or DataForSEO provided a phone number.
-            if not _has_actionable_contact(db, business):
-                if not business.primary_phone:
-                    _set_business_status(db, business, "needs_contact_enrichment")
-                    db.commit()
-                    continue
-                # Phone from DataForSEO / crawler is enough to qualify
-
-
             # Clean up old records before creating new ones on a re-run
             db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
             db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
@@ -785,17 +775,31 @@ def process_campaign_task(campaign_id: int):
                 prompt_template="research_gated_website_evidence",
                 parsed_output=diagnosis,
             ))
+            # Determine final status incorporating confidence and contact gate
+            has_contact = _has_actionable_contact(db, business) or bool(business.primary_phone)
+            
             if is_low_confidence:
-                _set_business_status(db, business, "needs_research")
+                final_status = "needs_research"
+                stage = "needs_review"
+                activity_body = "AI Analysis saved, but low confidence. Needs human review."
+            elif not has_contact:
+                final_status = "needs_contact_enrichment"
+                stage = "needs_review"
+                activity_body = "AI Analysis saved, but no actionable contact (email/phone) was found."
             else:
-                _set_business_status(db, business, "qualified")
+                final_status = "qualified"
+                stage = "qualified"
+                activity_body = "Qualified from live discovery, website research, AI analysis, and contact enrichment."
+
+            _set_business_status(db, business, final_status)
             crm_lead = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
             if not crm_lead:
-                db.add(CRMLead(business_id=business.id, stage="qualified" if not is_low_confidence else "needs_review", source="campaign"))
+                db.add(CRMLead(business_id=business.id, stage=stage, source="campaign"))
+            
             db.add(CRMActivity(
                 business_id=business.id,
-                activity_type="qualified" if not is_low_confidence else "needs_review",
-                body="Qualified from live discovery, website research, AI analysis, and contact enrichment." if not is_low_confidence else "AI Analysis saved, but low confidence. Needs human review.",
+                activity_type=stage,
+                body=activity_body,
                 created_by="Lead Intelligence",
             ))
             db.commit()
