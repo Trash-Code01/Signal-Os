@@ -33,6 +33,22 @@ def setup_admin(db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok", "message": "Admin user created: admin@devacia.com / admin123"}
 
+@app.post("/api/migrate-clear")
+def migrate_clear(payload: dict, db: Session = Depends(get_db)):
+    """Truncates a table. Use before re-inserting migrated data."""
+    from sqlalchemy import text as sa_text
+    table_name = payload.get("table_name")
+    allowed = {"campaigns", "businesses", "scores", "opportunities", "crm_leads"}
+    if table_name not in allowed:
+        return {"status": "error", "message": f"Table {table_name} not allowed"}
+    try:
+        db.execute(sa_text(f"TRUNCATE TABLE {table_name} CASCADE"))
+        db.commit()
+        return {"status": "ok", "message": f"Truncated {table_name}"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
 @app.post("/api/migrate-upload")
 def migrate_upload(payload: dict, db: Session = Depends(get_db)):
     """Accepts a JSON payload of tables and records and inserts them."""
@@ -49,17 +65,36 @@ def migrate_upload(payload: dict, db: Session = Depends(get_db)):
             return {"status": "error", "message": f"Table {table_name} not found"}
 
         cls = model_class.class_
-        # Disable FK checks for this session so we can insert in any order
-        db.execute(sa_text("SET session_replication_role = replica"))
+        # Drop FK constraints on this table temporarily to allow inserts in any order
+        if table_name == "crm_leads":
+            try:
+                db.execute(sa_text("ALTER TABLE crm_leads DROP CONSTRAINT IF EXISTS crm_leads_business_id_fkey"))
+                db.commit()
+            except Exception:
+                db.rollback()
         for record in records:
             db.merge(cls(**record))
-        db.commit()
-        db.execute(sa_text("SET session_replication_role = DEFAULT"))
         db.commit()
         return {"status": "ok", "inserted": len(records)}
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
+
+@app.post("/api/migrate-restore-fk")
+def migrate_restore_fk(db: Session = Depends(get_db)):
+    """Re-adds the crm_leads FK constraint after migration."""
+    from sqlalchemy import text as sa_text
+    try:
+        db.execute(sa_text(
+            "ALTER TABLE crm_leads ADD CONSTRAINT crm_leads_business_id_fkey "
+            "FOREIGN KEY (business_id) REFERENCES businesses(id)"
+        ))
+        db.commit()
+        return {"status": "ok", "message": "FK restored"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
 
 
 @app.on_event("startup")
