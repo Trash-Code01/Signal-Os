@@ -38,26 +38,29 @@ def migrate_upload(payload: dict, db: Session = Depends(get_db)):
     """Accepts a JSON payload of tables and records and inserts them."""
     try:
         from core.models import Base
+        from sqlalchemy import text as sa_text
         table_name = payload.get("table_name")
         records = payload.get("records", [])
         if not records:
             return {"status": "ok", "message": "No records"}
-            
-        # Find the model class
+
         model_class = next((c for c in Base.registry.mappers if c.class_.__tablename__ == table_name), None)
         if not model_class:
             return {"status": "error", "message": f"Table {table_name} not found"}
-            
+
         cls = model_class.class_
+        # Disable FK checks for this session so we can insert in any order
+        db.execute(sa_text("SET session_replication_role = replica"))
         for record in records:
-            # Create instance and merge
-            instance = cls(**record)
-            db.merge(instance)
+            db.merge(cls(**record))
+        db.commit()
+        db.execute(sa_text("SET session_replication_role = DEFAULT"))
         db.commit()
         return {"status": "ok", "inserted": len(records)}
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
+
 
 @app.on_event("startup")
 def ensure_crm_workspace_schema() -> None:
