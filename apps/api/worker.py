@@ -740,11 +740,14 @@ def process_campaign_task(campaign_id: int):
                 db.commit()
 
             diagnosis = asyncio.run(ai_sdr.analyze(evidence, industry_config))
-            # If AI is unavailable, do not fabricate a personalized diagnosis.
-            if not diagnosis or diagnosis.get("confidence") not in {"high", "medium"}:
+            if not diagnosis:
                 _set_business_status(db, business, "needs_research")
                 db.commit()
                 continue
+
+            # Always save AI output, even if confidence is low. 
+            # We will just mark low confidence as "needs_research" after saving.
+            is_low_confidence = diagnosis.get("confidence") not in {"high", "medium"}
 
             # Contact gate: qualify even without an Apollo/Hunter contact if
             # the website crawl or DataForSEO provided a phone number.
@@ -782,14 +785,17 @@ def process_campaign_task(campaign_id: int):
                 prompt_template="research_gated_website_evidence",
                 parsed_output=diagnosis,
             ))
-            _set_business_status(db, business, "qualified")
+            if is_low_confidence:
+                _set_business_status(db, business, "needs_research")
+            else:
+                _set_business_status(db, business, "qualified")
             crm_lead = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
             if not crm_lead:
-                db.add(CRMLead(business_id=business.id, stage="qualified", source="campaign"))
+                db.add(CRMLead(business_id=business.id, stage="qualified" if not is_low_confidence else "needs_review", source="campaign"))
             db.add(CRMActivity(
                 business_id=business.id,
-                activity_type="qualified",
-                body="Qualified from live discovery, website research, AI analysis, and contact enrichment.",
+                activity_type="qualified" if not is_low_confidence else "needs_review",
+                body="Qualified from live discovery, website research, AI analysis, and contact enrichment." if not is_low_confidence else "AI Analysis saved, but low confidence. Needs human review.",
                 created_by="Lead Intelligence",
             ))
             db.commit()
