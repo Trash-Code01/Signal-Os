@@ -33,13 +33,14 @@ def setup_admin(db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok", "message": "Admin user created: admin@devacia.com / admin123"}
 
+MIGRATE_TABLES = {"campaigns", "businesses", "scores", "opportunities", "crm_leads"}
+
 @app.post("/api/migrate-clear")
 def migrate_clear(payload: dict, db: Session = Depends(get_db)):
-    """Truncates a table. Use before re-inserting migrated data."""
+    """Truncates a table with CASCADE."""
     from sqlalchemy import text as sa_text
     table_name = payload.get("table_name")
-    allowed = {"campaigns", "businesses", "scores", "opportunities", "crm_leads"}
-    if table_name not in allowed:
+    if table_name not in MIGRATE_TABLES:
         return {"status": "error", "message": f"Table {table_name} not allowed"}
     try:
         db.execute(sa_text(f"TRUNCATE TABLE {table_name} CASCADE"))
@@ -49,29 +50,44 @@ def migrate_clear(payload: dict, db: Session = Depends(get_db)):
         db.rollback()
         return {"status": "error", "message": str(e)}
 
+@app.post("/api/migrate-disable-fk")
+def migrate_disable_fk(db: Session = Depends(get_db)):
+    """Drops ALL FK constraints on all migration tables so data can be inserted in any order."""
+    from sqlalchemy import text as sa_text
+    dropped = []
+    try:
+        # Find all FK constraints on our migration tables
+        result = db.execute(sa_text("""
+            SELECT tc.table_name, tc.constraint_name
+            FROM information_schema.table_constraints tc
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+              AND tc.table_name IN ('campaigns','businesses','scores','opportunities','crm_leads')
+        """))
+        constraints = result.fetchall()
+        for table_name, constraint_name in constraints:
+            db.execute(sa_text(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"'))
+            dropped.append(f"{table_name}.{constraint_name}")
+        db.commit()
+        return {"status": "ok", "dropped": dropped}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
 @app.post("/api/migrate-upload")
 def migrate_upload(payload: dict, db: Session = Depends(get_db)):
-    """Accepts a JSON payload of tables and records and inserts them."""
+    """Inserts a batch of records into a table. Call migrate-disable-fk first."""
     try:
         from core.models import Base
-        from sqlalchemy import text as sa_text
         table_name = payload.get("table_name")
         records = payload.get("records", [])
         if not records:
-            return {"status": "ok", "message": "No records"}
+            return {"status": "ok", "inserted": 0}
 
         model_class = next((c for c in Base.registry.mappers if c.class_.__tablename__ == table_name), None)
         if not model_class:
             return {"status": "error", "message": f"Table {table_name} not found"}
 
         cls = model_class.class_
-        # Drop FK constraints on this table temporarily to allow inserts in any order
-        if table_name == "crm_leads":
-            try:
-                db.execute(sa_text("ALTER TABLE crm_leads DROP CONSTRAINT IF EXISTS crm_leads_business_id_fkey"))
-                db.commit()
-            except Exception:
-                db.rollback()
         for record in records:
             db.merge(cls(**record))
         db.commit()
@@ -79,22 +95,6 @@ def migrate_upload(payload: dict, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
-
-@app.post("/api/migrate-restore-fk")
-def migrate_restore_fk(db: Session = Depends(get_db)):
-    """Re-adds the crm_leads FK constraint after migration."""
-    from sqlalchemy import text as sa_text
-    try:
-        db.execute(sa_text(
-            "ALTER TABLE crm_leads ADD CONSTRAINT crm_leads_business_id_fkey "
-            "FOREIGN KEY (business_id) REFERENCES businesses(id)"
-        ))
-        db.commit()
-        return {"status": "ok", "message": "FK restored"}
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "message": str(e)}
-
 
 
 @app.on_event("startup")
