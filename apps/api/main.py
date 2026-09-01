@@ -20,6 +20,18 @@ app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
 
 app.include_router(auth_router)
 
+@app.get("/api/debug-discovery")
+def debug_discovery():
+    import asyncio
+    import os
+    from providers.serper_discovery_provider import SerperDiscoveryProvider
+    try:
+        key = os.environ.get('SERPER_API_KEY', 'MISSING')
+        provider = SerperDiscoveryProvider()
+        res = asyncio.run(provider.discover('roofing', 'Dallas', 'roofing', 5))
+        return {'key_length': len(key) if key != 'MISSING' else 0, 'result_count': len(res), 'sample': res[:1] if res else []}
+    except Exception as e:
+        return {'error': str(e)}
 @app.get("/api/health")
 def health_check():
     """Lightweight keepalive endpoint — no DB query, returns instantly."""
