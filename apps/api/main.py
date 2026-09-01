@@ -19,7 +19,13 @@ from auth import router as auth_router
 app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
 
 app.include_router(auth_router)
-  
+
+@app.get("/api/health")
+def health_check():
+    """Lightweight keepalive endpoint — no DB query, returns instantly."""
+    return {"status": "ok"}
+
+
 @app.post("/api/setup-admin")
 def setup_admin(db: Session = Depends(get_db)):
     """Creates the admin user only if NO users exist. Safe bootstrap endpoint."""
