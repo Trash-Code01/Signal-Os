@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -20,6 +20,19 @@ app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
 
 app.include_router(auth_router)
   
+@app.post("/api/setup-admin")
+def setup_admin(db: Session = Depends(get_db)):
+    """Creates the admin user only if NO users exist. Safe bootstrap endpoint."""
+    from core.models import User
+    from core.auth import get_password_hash
+    user_count = db.query(User).count()
+    if user_count > 0:
+        return {"status": "exists", "message": f"Database already has {user_count} user(s). No action taken."}
+    admin = User(email="admin@devacia.com", hashed_password=get_password_hash("admin123"))
+    db.add(admin)
+    db.commit()
+    return {"status": "ok", "message": "Admin user created: admin@devacia.com / admin123"}
+
 @app.post("/api/migrate-upload")
 def migrate_upload(payload: dict, db: Session = Depends(get_db)):
     """Accepts a JSON payload of tables and records and inserts them."""
