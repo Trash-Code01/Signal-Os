@@ -27,13 +27,20 @@
         sync: false
       - key: SERPER_API_KEY
         sync: false
-      - key: HUNTER_API_KEY
-        sync: false
       - key: SNOVIO_CLIENT_ID
         sync: false
       - key: SNOVIO_CLIENT_SECRET
         sync: false
       - key: PROXYCURL_API_KEY
+        sync: false
+      # Optional direct link to this service's Environment page. It is safe to
+      # expose to the authenticated UI and lets operators jump from an
+      # exhausted-credit alert straight to the place where Render keys change.
+      - key: RENDER_ENVIRONMENT_URL
+        sync: false
+      # Set this to the public Devacia frontend URL. Keeping it explicit avoids
+      # credentialed CORS requests from arbitrary origins.
+      - key: FRONTEND_ORIGIN
         sync: false
 
   # 2. Next.js Frontend (Docker)

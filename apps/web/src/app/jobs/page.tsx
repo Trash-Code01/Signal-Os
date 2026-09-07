@@ -13,16 +13,10 @@ interface Stage {
 }
 
 const PIPELINE_STAGES: Stage[] = [
-  { key: 'discovery', label: 'Business Discovery', status: 'pending' },
-  { key: 'deduplication', label: 'Deduplication', status: 'pending' },
-  { key: 'website_check', label: 'Website Discovery', status: 'pending' },
-  { key: 'crawler', label: 'Playwright Crawler', status: 'pending' },
-  { key: 'ux_audit', label: 'UX / Conversion Audit', status: 'pending' },
-  { key: 'scoring', label: 'Lead Qualification & Scoring', status: 'pending' },
-  { key: 'apollo', label: 'Apollo Decision-Maker Enrichment', status: 'pending' },
-  { key: 'hunter', label: 'Hunter Email Verification', status: 'pending' },
-  { key: 'ai_sdr', label: 'AI SDR Analysis (Gemini)', status: 'pending' },
-  { key: 'crm', label: 'CRM & Dossier Generation', status: 'pending' },
+  { key: 'discovery', label: 'Business Discovery & Deduplication', status: 'pending' },
+  { key: 'crawler', label: 'Website Crawl & UX Audit', status: 'pending' },
+  { key: 'enrichment', label: 'Contact Enrichment', status: 'pending' },
+  { key: 'ai_sdr', label: 'AI SDR Analysis & Scoring', status: 'pending' },
 ];
 
 function StatusIcon({ status }: { status: StageStatus }) {

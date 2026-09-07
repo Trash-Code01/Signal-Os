@@ -19,17 +19,29 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Add deleted_at to campaigns
-    op.add_column('campaigns', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
-    op.create_index(op.f('ix_campaigns_deleted_at'), 'campaigns', ['deleted_at'], unique=False)
-    
-    # Add deleted_at to businesses
-    op.add_column('businesses', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
-    op.create_index(op.f('ix_businesses_deleted_at'), 'businesses', ['deleted_at'], unique=False)
-    
-    # Add deleted_at to crm_leads
-    op.add_column('crm_leads', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
-    op.create_index(op.f('ix_crm_leads_deleted_at'), 'crm_leads', ['deleted_at'], unique=False)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    campaign_cols = {c["name"] for c in inspector.get_columns("campaigns")}
+    if "deleted_at" not in campaign_cols:
+        op.add_column('campaigns', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
+    campaign_indexes = {idx["name"] for idx in inspector.get_indexes("campaigns")}
+    if "ix_campaigns_deleted_at" not in campaign_indexes:
+        op.create_index(op.f('ix_campaigns_deleted_at'), 'campaigns', ['deleted_at'], unique=False)
+
+    biz_cols = {c["name"] for c in inspector.get_columns("businesses")}
+    if "deleted_at" not in biz_cols:
+        op.add_column('businesses', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
+    biz_indexes = {idx["name"] for idx in inspector.get_indexes("businesses")}
+    if "ix_businesses_deleted_at" not in biz_indexes:
+        op.create_index(op.f('ix_businesses_deleted_at'), 'businesses', ['deleted_at'], unique=False)
+
+    crm_cols = {c["name"] for c in inspector.get_columns("crm_leads")}
+    if "deleted_at" not in crm_cols:
+        op.add_column('crm_leads', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
+    crm_indexes = {idx["name"] for idx in inspector.get_indexes("crm_leads")}
+    if "ix_crm_leads_deleted_at" not in crm_indexes:
+        op.create_index(op.f('ix_crm_leads_deleted_at'), 'crm_leads', ['deleted_at'], unique=False)
 
 
 def downgrade() -> None:

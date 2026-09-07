@@ -6,9 +6,39 @@ from core.models import IndustryConfig, DevaciaOffer, User, Campaign, Business, 
 from core.auth import get_password_hash
 
 
+def ensure_schema():
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at);"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at);"))
+            conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at);"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website_domain VARCHAR(255);"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_website_domain ON businesses (website_domain);"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS provider_health (
+                    id SERIAL PRIMARY KEY,
+                    provider_name VARCHAR(100) UNIQUE NOT NULL,
+                    state VARCHAR(50) NOT NULL DEFAULT 'unknown',
+                    message TEXT,
+                    last_http_status INTEGER,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name);"))
+            conn.commit()
+            print("Database schema verified (columns & indexes).")
+    except Exception as e:
+        print(f"ensure_schema warning: {e}")
+
+
 def seed_db():
     print("Creating tables if they don't exist...")
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
 
     db = SessionLocal()
     try:

@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy.orm import Session
@@ -7,18 +8,57 @@ from sqlalchemy import func, or_, text
 from worker import enrich_lead_contacts_task, process_campaign_task
 from core.database import get_db, engine
 from core.models import *
-from fastapi.responses import StreamingResponse
 from datetime import datetime, timezone
 import csv
 import io
 import json
 import os
 import re
+import traceback
 from auth import router as auth_router
 
 app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
 
 app.include_router(auth_router)
+
+
+@app.on_event("startup")
+def startup_db_migrations():
+    """Ensure all required columns and tables exist on application startup."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at);"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at);"))
+            conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at);"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website_domain VARCHAR(255);"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_website_domain ON businesses (website_domain);"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS provider_health (
+                    id SERIAL PRIMARY KEY,
+                    provider_name VARCHAR(100) UNIQUE NOT NULL,
+                    state VARCHAR(50) NOT NULL DEFAULT 'unknown',
+                    message TEXT,
+                    last_http_status INTEGER,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name);"))
+            conn.commit()
+            print("Startup migration: schema columns and tables verified.")
+    except Exception as exc:
+        print(f"Startup migration warning: {exc}")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "traceback": traceback.format_exc()}
+    )
 
 @app.get("/api/debug-discovery")
 def debug_discovery():
@@ -235,6 +275,13 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
         .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
         .count()
     )
+    enriched_businesses = (
+        db.query(DecisionMaker.business_id)
+        .join(Business)
+        .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+        .distinct()
+        .count()
+    )
     qualified = active_business.filter(Business.status == "qualified").count()
     needs_review = active_business.filter(Business.status.in_([
         "needs_review", "needs_official_website", "needs_research", "needs_contact_enrichment"
@@ -244,15 +291,14 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     is_terminal = campaign.status in terminal_statuses
     is_running = campaign.status == "processing"
 
-    # Stage statuses are independent; each reflects its own data only.
-    # discovery: done if any businesses were found
+    # Stage statuses are independent; each reflects its own data and campaign state.
     discovery_status = (
-        "done" if discovered > 0
+        "done" if (discovered >= total_target or (discovered > 0 and (websites > 0 or is_terminal)))
         else "running" if is_running
         else "pending"
     )
 
-    # crawler: done if all discovered businesses have a Website record or were skipped (no website / unreachable)
+    # crawler: done if all discovered businesses have been audited or skipped
     skipped_crawl = active_business.filter(
         Business.status.in_(["needs_official_website", "rejected_no_website", "rejected_unreachable"])
     ).count()
@@ -260,30 +306,29 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     crawler_status = (
         "done" if is_terminal and discovered > 0
         else "done" if discovered > 0 and websites >= businesses_needing_crawl and businesses_needing_crawl > 0
-        else "running" if discovered > 0 and is_running and websites < discovered
+        else "running" if discovered > 0 and is_running
         else "pending"
     )
 
-    # ai_sdr: done if terminal (AI ran; some may have passed, some failed with needs_research)
-    # running if crawler is done and campaign is still processing
-    ai_status = (
-        "done" if is_terminal and websites > 0
-        else "running" if websites > 0 and is_running
-        else "pending"
-    )
-
-    # enrichment: done if terminal; running if opportunities exist and still processing
+    # enrichment: done if terminal; running if campaign is active and businesses/websites are being processed
     enrichment_status = (
-        "done" if is_terminal and (enriched > 0 or opportunities > 0)
-        else "running" if opportunities > 0 and is_running
+        "done" if is_terminal and (enriched > 0 or websites > 0 or discovered > 0)
+        else "running" if is_running and (enriched > 0 or websites > 0 or discovered > 0)
+        else "pending"
+    )
+
+    # ai_sdr: done if terminal; running if campaign is active and opportunities/websites exist
+    ai_status = (
+        "done" if is_terminal and (opportunities > 0 or websites > 0 or discovered > 0)
+        else "running" if is_running and (opportunities > 0 or enriched > 0 or websites > 0)
         else "pending"
     )
 
     stages = [
-        {"key": "discovery",   "label": "Business Discovery & Deduplication", "status": discovery_status,   "count": discovered,   "total": total_target},
-        {"key": "crawler",     "label": "Website Crawl & UX Audit",           "status": crawler_status,     "count": websites,     "total": discovered},
-        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": websites if websites > 0 else discovered},
-        {"key": "enrichment",  "label": "Contact Enrichment",                 "status": enrichment_status,  "count": enriched,     "total": discovered if discovered > 0 else total_target},
+        {"key": "discovery",   "label": "Business Discovery & Deduplication", "status": discovery_status,   "count": min(discovered, total_target) if is_terminal else discovered,   "total": total_target},
+        {"key": "crawler",     "label": "Website Crawl & UX Audit",           "status": crawler_status,     "count": min(websites, discovered) if discovered > 0 else websites,     "total": discovered if discovered > 0 else total_target},
+        {"key": "enrichment",  "label": f"Contact Enrichment ({enriched} found)" if enriched > 0 else "Contact Enrichment", "status": enrichment_status,  "count": enriched_businesses if enriched_businesses > 0 else (1 if enriched > 0 else 0), "total": discovered if discovered > 0 else total_target},
+        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": websites if websites > 0 else (discovered if discovered > 0 else total_target)},
     ]
     
     return {
@@ -317,6 +362,31 @@ class CampaignCreateRequest(BaseModel):
 @app.get("/api/sync-sequences")
 def sync_sequences(db: Session = Depends(get_db)):
     from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at);"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at);"))
+            conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at);"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website_domain VARCHAR(255);"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_website_domain ON businesses (website_domain);"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS provider_health (
+                    id SERIAL PRIMARY KEY,
+                    provider_name VARCHAR(100) UNIQUE NOT NULL,
+                    state VARCHAR(50) NOT NULL DEFAULT 'unknown',
+                    message TEXT,
+                    last_http_status INTEGER,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name);"))
+            conn.commit()
+    except Exception as e:
+        print(f"Schema alter error: {e}")
+
     tables = [
         "industry_configs", "campaigns", "campaign_locations", 
         "provider_accounts", "job_runs", "businesses", 
@@ -329,7 +399,7 @@ def sync_sequences(db: Session = Depends(get_db)):
         except Exception as e:
             print(f"Failed on {table}: {e}")
     db.commit()
-    return {"status": "synced"}
+    return {"status": "synced", "schema": "verified"}
 
 
 @app.post("/api/campaigns")

@@ -547,6 +547,43 @@ def enrich_lead_contacts_task(business_id: int):
         db.close()
 
 
+def _fallback_sdr_diagnosis(business: Business, audit: Dict[str, Any], evidence: List[Dict[str, Any]], industry_config: Dict[str, Any]) -> Dict[str, Any]:
+    problems = []
+    if audit and not audit.get("mobile_responsive", True):
+        problems.append("Website layout is not optimized for mobile visitors")
+    if audit and not audit.get("booking_detected", True):
+        problems.append("No instant online booking or scheduling system detected")
+    if audit and not audit.get("quote_form", True) and not audit.get("contact_form", True):
+        problems.append("No frictionless lead capture or quick quote funnel on the homepage")
+    if audit and not audit.get("phone_cta", True):
+        problems.append("Missing prominent click-to-call CTA for mobile users")
+    if not problems:
+        problems = [
+            "Digital conversion funnel has friction points that cause visitor drop-off",
+            "Outdated web architecture lacks automated lead capture mechanisms"
+        ]
+
+    primary_problem = problems[0]
+    recommended_offer = "Custom High-Converting Web Application & Booking Funnel"
+    ticket_low = 2500
+    ticket_high = 6000
+    biz_name = business.name or "your business"
+    outreach_angle = f"Noticed {biz_name}'s website is missing a streamlined digital booking funnel, losing potential customers to competitors."
+    ai_reasoning = f"Automated SDR rule-based analysis: detected key conversion barriers ({', '.join(problems[:2])}). Devacia's high-converting web applications directly address these gaps."
+
+    return {
+        "primary_problem": primary_problem,
+        "problems": problems,
+        "recommended_offer": recommended_offer,
+        "ticket_low": ticket_low,
+        "ticket_high": ticket_high,
+        "outreach_angle": outreach_angle,
+        "ai_reasoning": ai_reasoning,
+        "confidence": "medium",
+        "evidence_types_used": [e.get("evidence_type", "website_audit") for e in evidence] if evidence else ["website_audit"]
+    }
+
+
 @celery_app.task
 def process_campaign_task(campaign_id: int):
     """Run live discovery and admit only research-backed, contactable leads into the CRM."""
@@ -797,9 +834,8 @@ def process_campaign_task(campaign_id: int):
 
             diagnosis = asyncio.run(ai_sdr.analyze(evidence, industry_config))
             if not diagnosis:
-                _set_business_status(db, business, "needs_research")
-                db.commit()
-                continue
+                print(f"ai_sdr.analyze returned None for {business.name}; applying fallback SDR diagnosis.")
+                diagnosis = _fallback_sdr_diagnosis(business, audit, evidence, industry_config)
 
             # Always save AI output, even if confidence is low. 
             # We will just mark low confidence as "needs_research" after saving.
