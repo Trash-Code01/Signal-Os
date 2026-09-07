@@ -14,6 +14,7 @@ export default function LeadDossier() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isGeneratingEmail, setIsGeneratingEmail] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleCopy = async (text: string, id: string) => {
     try {
@@ -22,6 +23,24 @@ export default function LeadDossier() {
       setTimeout(() => setCopiedId(null), 2000);
     } catch (err) {
       console.error("Failed to copy:", err);
+    }
+  };
+
+  const handleRefreshResearch = async () => {
+    setIsRefreshing(true);
+    try {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const res = await fetch(`${apiUrl}/api/crm/leads/${id}/enrich`, { method: "POST" });
+      if (res.ok) {
+        const refreshRes = await fetch(`${apiUrl}/api/crm/leads/${id}`);
+        if (refreshRes.ok) {
+          setLead(await refreshRes.json());
+        }
+      }
+    } catch (e) {
+      console.error("Failed to refresh research:", e);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -101,99 +120,81 @@ export default function LeadDossier() {
   const evidenceSummary = detail.evidence_summary || "Crawl data and audit findings will appear here after research completes.";
   const socialProfiles = lead.social_profiles || [];
 
-  const renderContactCard = (c: any, idx: number, sourcePrefix: string) => {
-    let sourceLabel = c.source || "unknown";
-    let sourceIcon = "person";
-    if (sourceLabel.includes("website")) {
-      sourceLabel = "Website Crawl";
-      sourceIcon = "language";
-    } else if (sourceLabel.includes("snovio")) {
-      sourceLabel = "Snov.io";
-      sourceIcon = "radar";
-    } else if (sourceLabel.includes("proxycurl")) {
-      sourceLabel = "Proxycurl Executives";
-      sourceIcon = "manage_search";
-    } else if (sourceLabel.includes("hunter")) {
-      sourceLabel = "Hunter.io";
-      sourceIcon = "find_in_page";
-    } else if (sourceLabel.includes("serper")) {
-      sourceLabel = "Google Maps";
-      sourceIcon = "location_on";
-    } else {
-      sourceLabel = sourceLabel.replace(/_/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase());
+  // 1. Crawl Emails & Phones (Website & General Contacts)
+  const crawlEmails = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: Array<{ email: string; sourceUrl?: string }> = [];
+    (lead.contacts || []).forEach((c: any) => {
+      if (c.email && !c.source?.includes("snovio") && !c.source?.includes("proxycurl") && !c.source?.includes("apollo")) {
+        const clean = c.email.trim().toLowerCase();
+        if (!seen.has(clean)) {
+          seen.add(clean);
+          list.push({ email: c.email.trim(), sourceUrl: c.source_url });
+        }
+      }
+    });
+    return list;
+  }, [lead.contacts]);
+
+  const crawlPhones = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    if (lead.phone && lead.phone.trim()) {
+      seen.add(lead.phone.trim());
+      list.push(lead.phone.trim());
     }
+    (lead.contacts || []).forEach((c: any) => {
+      const p = (c.phone || c.mobile || "").trim();
+      if (p && !seen.has(p)) {
+        seen.add(p);
+        list.push(p);
+      }
+    });
+    return list;
+  }, [lead.phone, lead.contacts]);
 
-    return (
-      <div key={`${sourcePrefix}-${idx}`} className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 p-5 hover:border-outline-variant transition-colors relative group/card">
-        <button className="absolute top-4 right-4 text-outline hover:text-primary opacity-0 group-hover/card:opacity-100 transition-opacity">
-          <span className="material-symbols-outlined text-[18px]">edit</span>
-        </button>
-        <div className="flex items-start gap-4">
-          <div className="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center text-primary font-medium border border-outline-variant/50 shrink-0">
-            {c.name ? c.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2).toUpperCase() : "?"}
-          </div>
-          <div className="w-full min-w-0">
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-base font-medium text-primary font-serif truncate pr-2">{c.name || "Unknown"}</h3>
-              {c.verification_status === "verified" && <span className="text-xs text-[#4ade80] shrink-0">Verified</span>}
-            </div>
-            <p className="text-sm text-on-surface-variant flex items-center flex-wrap gap-2 mb-3">
-              <span className="truncate">{c.title || (c.contact_type === "company" ? "Website contact" : "Decision maker")}</span>
-              {c.source && (
-                <>
-                  <span className="text-outline shrink-0">|</span>
-                  <span className="text-xs bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 flex items-center gap-1 shrink-0">
-                    <span className="material-symbols-outlined text-[12px]">{sourceIcon}</span>
-                    {sourceLabel}
-                  </span>
-                </>
-              )}
-              {c.source_url && (
-                <a className="text-xs text-primary/80 hover:text-primary flex items-center shrink-0 gap-1 ml-1" href={c.source_url} target="_blank" rel="noreferrer">
-                  <span className="material-symbols-outlined text-[12px]">open_in_new</span> Evidence
-                </a>
-              )}
-            </p>
-            
-            <div className="space-y-2 mt-4 pt-4 border-t border-outline-variant/20 font-serif w-full">
-              <div 
-                className={`flex items-center gap-3 text-sm ${c.email ? "cursor-pointer hover:opacity-80 active:scale-[0.98] transition-all" : ""}`}
-                onClick={() => c.email && handleCopy(c.email, `${sourcePrefix}-email-${idx}`)}
-                title={c.email ? "Click to copy" : ""}
-              >
-                <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.email ? "text-[#4ade80]" : "text-outline"}`}>mail</span>
-                <span className={c.email ? "text-[#4ade80] break-all" : "text-outline italic"}>
-                  {copiedId === `${sourcePrefix}-email-${idx}` ? "Copied!" : (c.email || "Email not found")}
-                </span>
-              </div>
-              <div 
-                className={`flex items-center gap-3 text-sm ${c.phone ? "cursor-pointer hover:opacity-80 active:scale-[0.98] transition-all" : ""}`}
-                onClick={() => c.phone && handleCopy(c.phone, `${sourcePrefix}-phone-${idx}`)}
-                title={c.phone ? "Click to copy" : ""}
-              >
-                <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.phone ? "text-[#4ade80]" : "text-outline"}`}>phone</span>
-                <span className={c.phone ? "text-[#4ade80] break-words" : "text-outline italic"}>
-                  {copiedId === `${sourcePrefix}-phone-${idx}` ? "Copied!" : (c.phone || "Phone not found")}
-                </span>
-              </div>
-              <div className="flex items-center gap-3 text-sm">
-                <span className={`material-symbols-outlined shrink-0 text-[16px] ${c.linkedin_url ? "text-[#4ade80]" : "text-outline"}`}>work</span>
-                {c.linkedin_url ? (
-                  <a href={c.linkedin_url} target="_blank" rel="noreferrer" className="text-[#4ade80] hover:underline break-all">LinkedIn</a>
-                ) : (
-                  <span className="text-outline italic">LinkedIn not found</span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  // 2. Snov.io Personal Emails
+  const snovioList = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: any[] = [];
+    (lead.contacts || []).forEach((c: any) => {
+      if (c.source?.includes("snovio")) {
+        const email = (c.email || "").trim().toLowerCase();
+        if (email && !seen.has(email)) {
+          seen.add(email);
+          list.push(c);
+        } else if (!email && c.name && !seen.has(c.name.toLowerCase())) {
+          seen.add(c.name.toLowerCase());
+          list.push(c);
+        }
+      }
+    });
+    return list;
+  }, [lead.contacts]);
 
-  const websiteContacts = (lead.contacts || []).filter((c: any) => !c.source?.includes("snovio") && !c.source?.includes("proxycurl") && !c.source?.includes("apollo"));
-  const snovioContacts = (lead.contacts || []).filter((c: any) => c.source?.includes("snovio"));
-  const proxycurlContacts = (lead.contacts || []).filter((c: any) => c.source?.includes("proxycurl"));
+  // 3. Owners & Decision Makers (Proxycurl + named leaders)
+  const decisionMakers = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: any[] = [];
+    (lead.contacts || []).forEach((c: any) => {
+      const name = (c.name || "").trim();
+      const hasValidName = name && name !== "Unknown" && name !== "Unknown contact" && c.contact_type !== "company";
+      const isExecutive = c.source?.includes("proxycurl") || c.source?.includes("apollo") || 
+        c.title?.toLowerCase().includes("owner") || c.title?.toLowerCase().includes("founder") || 
+        c.title?.toLowerCase().includes("chef") || c.title?.toLowerCase().includes("ceo") || 
+        c.title?.toLowerCase().includes("president") || c.title?.toLowerCase().includes("manager") ||
+        c.title?.toLowerCase().includes("director");
+        
+      if (hasValidName || isExecutive) {
+        const key = (name || c.email || c.linkedin_url || "").trim().toLowerCase();
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          list.push(c);
+        }
+      }
+    });
+    return list;
+  }, [lead.contacts]);
 
   return (
     <div className="lead-dossier-page min-h-screen bg-[#141313] text-on-surface text-sm flex flex-col animate-in fade-in duration-500">
@@ -293,58 +294,255 @@ export default function LeadDossier() {
 
           {/* Editable Content Blocks */}
           <div className="space-y-12">
-            {/* Section: Decision Makers */}
-                          <section className="group">
-                <div className="flex items-center justify-between mb-4 border-b border-outline-variant/20 pb-2">
+            {/* Section: Contacts Workspace */}
+            <section className="group space-y-6">
+              {/* 1. Website & General Contacts Container */}
+              <div>
+                <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
                   <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
                     <span className="material-symbols-outlined text-[16px]">manage_accounts</span> Website & General Contacts
+                    <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
+                      {crawlEmails.length} {crawlEmails.length === 1 ? "email" : "emails"} • {crawlPhones.length} {crawlPhones.length === 1 ? "phone" : "phones"}
+                    </span>
                   </h2>
-                  <button className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2 py-1 rounded transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">refresh</span> Refresh contact research
+                  <button onClick={handleRefreshResearch} disabled={isRefreshing} className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                    <span className={`material-symbols-outlined text-[14px] ${isRefreshing ? "animate-spin" : ""}`}>refresh</span>
+                    {isRefreshing ? "Refreshing..." : "Refresh contacts"}
                   </button>
                 </div>
-                <div className="grid grid-cols-1 gap-4">
-                  {websiteContacts.length > 0 ? (
-                    websiteContacts.map((c: any, idx: number) => renderContactCard(c, idx, "web"))
+
+                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5 space-y-4">
+                  {/* Emails */}
+                  <div>
+                    <div className="text-[10px] font-semibold text-outline uppercase tracking-wider mb-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[14px]">mail</span> Crawled Website Emails
+                      </span>
+                      <span className="text-[10px] text-outline/60 lowercase">click to copy</span>
+                    </div>
+                    {crawlEmails.length > 0 ? (
+                      <div className="flex flex-wrap gap-2.5">
+                        {crawlEmails.map((item, idx) => (
+                          <div
+                            key={idx}
+                            onClick={() => handleCopy(item.email, `crawl-email-${idx}`)}
+                            className="group flex items-center gap-2 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-[0.98]"
+                            title="Click to copy email"
+                          >
+                            <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">mail</span>
+                            <span className="text-sm font-serif text-[#4ade80] break-all">{item.email}</span>
+                            <span className="material-symbols-outlined text-outline group-hover:text-primary text-[14px] ml-1 shrink-0">
+                              {copiedId === `crawl-email-${idx}` ? "check" : "content_copy"}
+                            </span>
+                            {copiedId === `crawl-email-${idx}` && (
+                              <span className="text-[10px] text-[#4ade80] font-semibold animate-in fade-in">Copied!</span>
+                            )}
+                            {item.sourceUrl && (
+                              <a
+                                href={item.sourceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-[10px] text-outline hover:text-primary border-l border-outline-variant/30 pl-2 ml-1"
+                                title="View Evidence Source"
+                              >
+                                Evidence
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-outline italic py-1">No public emails discovered on website.</div>
+                    )}
+                  </div>
+
+                  {/* Phone Numbers */}
+                  <div className="pt-3 border-t border-outline-variant/20">
+                    <div className="text-[10px] font-semibold text-outline uppercase tracking-wider mb-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[14px]">call</span> Phone Numbers
+                      </span>
+                      <span className="text-[10px] text-outline/60 lowercase">click to copy</span>
+                    </div>
+                    {crawlPhones.length > 0 ? (
+                      <div className="flex flex-wrap gap-2.5">
+                        {crawlPhones.map((phone, idx) => (
+                          <div
+                            key={idx}
+                            onClick={() => handleCopy(phone, `crawl-phone-${idx}`)}
+                            className="group flex items-center gap-2 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-[0.98]"
+                            title="Click to copy phone"
+                          >
+                            <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">phone</span>
+                            <span className="text-sm font-serif text-[#4ade80]">{phone}</span>
+                            <span className="material-symbols-outlined text-outline group-hover:text-primary text-[14px] ml-1 shrink-0">
+                              {copiedId === `crawl-phone-${idx}` ? "check" : "content_copy"}
+                            </span>
+                            {copiedId === `crawl-phone-${idx}` && (
+                              <span className="text-[10px] text-[#4ade80] font-semibold animate-in fade-in">Copied!</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-outline italic py-1">No phone numbers captured.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. SNOV.IO Personal Emails Container */}
+              <div>
+                <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
+                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[14px]">radar</span> SNOV.IO PERSONAL EMAILS
+                    <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
+                      {snovioList.length} {snovioList.length === 1 ? "email" : "emails"}
+                    </span>
+                  </h3>
+                </div>
+                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5">
+                  {snovioList.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {snovioList.map((c: any, idx: number) => (
+                        <div
+                          key={idx}
+                          onClick={() => c.email && handleCopy(c.email, `snovio-${idx}`)}
+                          className={`flex items-start justify-between gap-3 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 p-3 rounded-lg transition-all ${c.email ? "cursor-pointer active:scale-[0.98]" : ""}`}
+                          title={c.email ? "Click to copy email" : ""}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">alternate_email</span>
+                              <span className="text-sm font-serif text-[#4ade80] truncate font-medium break-all">
+                                {c.email || "No email"}
+                              </span>
+                              {c.verification_status === "verified" && (
+                                <span className="text-[9px] bg-[#4ade80]/15 text-[#4ade80] border border-[#4ade80]/30 px-1.5 py-0.2 rounded font-semibold uppercase shrink-0">
+                                  Verified
+                                </span>
+                              )}
+                            </div>
+                            {(c.name || c.title) && (
+                              <p className="text-xs text-on-surface-variant truncate pl-6">
+                                {c.name && <span className="text-primary font-medium">{c.name}</span>}
+                                {c.name && c.title && <span className="text-outline mx-1">•</span>}
+                                {c.title && <span className="text-outline">{c.title}</span>}
+                              </p>
+                            )}
+                          </div>
+                          {c.email && (
+                            <button className="text-outline hover:text-primary shrink-0 pt-0.5" title="Copy">
+                              <span className="material-symbols-outlined text-[16px]">
+                                {copiedId === `snovio-${idx}` ? "check" : "content_copy"}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   ) : (
-                    <div className="text-sm text-on-surface-variant italic py-4">No general contacts captured.</div>
+                    <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
+                      <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">mark_email_unread</span>
+                      <span className="text-sm text-on-surface-variant font-medium">Snov.io search yielded no personal emails.</span>
+                      <span className="text-xs text-outline mt-1 max-w-sm">Domain query found no personal inboxes or was rate-limited.</span>
+                    </div>
                   )}
                 </div>
+              </div>
 
-                <div className="mt-8">
-                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[14px]">radar</span> SNOV.IO ENRICHMENT
+              {/* 3. Owner & Decision Makers Container */}
+              <div>
+                <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
+                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[14px]">manage_search</span> OWNERS & DECISION MAKERS
+                    <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
+                      {decisionMakers.length} {decisionMakers.length === 1 ? "person" : "people"}
+                    </span>
                   </h3>
-                  <div className="grid grid-cols-1 gap-4">
-                    {snovioContacts.length > 0 ? (
-                      snovioContacts.map((c: any, idx: number) => renderContactCard(c, idx, "snovio"))
-                    ) : (
-                      <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
-                        <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
-                        <span className="text-sm text-on-surface-variant font-medium">Snov.io search yielded no results.</span>
-                        <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
-                      </div>
-                    )}
-                  </div>
                 </div>
+                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5">
+                  {decisionMakers.length > 0 ? (
+                    <div className="divide-y divide-outline-variant/20">
+                      {decisionMakers.map((dm: any, idx: number) => (
+                        <div key={idx} className="py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-full bg-surface-container-high border border-outline-variant/50 flex items-center justify-center text-xs text-primary font-semibold shrink-0 font-serif">
+                              {dm.name ? dm.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2).toUpperCase() : "DM"}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="text-sm font-semibold text-primary truncate font-serif">{dm.name || "Unnamed Executive"}</h4>
+                                {dm.source && (
+                                  <span className="text-[9px] bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 uppercase tracking-wider shrink-0">
+                                    {dm.source.includes("proxycurl") ? "Proxycurl" : dm.source.includes("serper") ? "Google Maps" : dm.source}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-on-surface-variant truncate mt-0.5">
+                                {dm.title || "Decision Maker / Executive"}
+                              </p>
+                            </div>
+                          </div>
 
-                <div className="mt-8">
-                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[14px]">manage_search</span> PROXYCURL ENRICHMENT
-                  </h3>
-                  <div className="grid grid-cols-1 gap-4">
-                    {proxycurlContacts.length > 0 ? (
-                      proxycurlContacts.map((c: any, idx: number) => renderContactCard(c, idx, "proxycurl"))
-                    ) : (
-                      <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
-                        <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
-                        <span className="text-sm text-on-surface-variant font-medium">Proxycurl search yielded no results.</span>
-                        <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
-                      </div>
-                    )}
-                  </div>
+                          <div className="flex items-center flex-wrap gap-2 pl-12 sm:pl-0 font-serif">
+                            {dm.email && (
+                              <div
+                                onClick={() => handleCopy(dm.email, `dm-email-${idx}`)}
+                                className="flex items-center gap-1.5 text-xs bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-2.5 py-1.5 rounded cursor-pointer transition-all active:scale-[0.98]"
+                                title="Click to copy email"
+                              >
+                                <span className="material-symbols-outlined text-[#4ade80] text-[14px]">mail</span>
+                                <span className="text-[#4ade80]">{dm.email}</span>
+                                <span className="material-symbols-outlined text-outline text-[12px]">
+                                  {copiedId === `dm-email-${idx}` ? "check" : "content_copy"}
+                                </span>
+                              </div>
+                            )}
+                            {dm.phone && (
+                              <div
+                                onClick={() => handleCopy(dm.phone, `dm-phone-${idx}`)}
+                                className="flex items-center gap-1.5 text-xs bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-2.5 py-1.5 rounded cursor-pointer transition-all active:scale-[0.98]"
+                                title="Click to copy phone"
+                              >
+                                <span className="material-symbols-outlined text-[#4ade80] text-[14px]">phone</span>
+                                <span className="text-[#4ade80]">{dm.phone}</span>
+                                <span className="material-symbols-outlined text-outline text-[12px]">
+                                  {copiedId === `dm-phone-${idx}` ? "check" : "content_copy"}
+                                </span>
+                              </div>
+                            )}
+                            {dm.linkedin_url && (
+                              <a
+                                href={dm.linkedin_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1 text-xs text-[#0a66c2] hover:text-[#388ee7] bg-[#0a66c2]/10 border border-[#0a66c2]/20 px-2.5 py-1.5 rounded transition-colors"
+                                title="View LinkedIn Profile"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">work</span>
+                                <span>LinkedIn</span>
+                                <span className="material-symbols-outlined text-[10px]">open_in_new</span>
+                              </a>
+                            )}
+                            {!dm.email && !dm.phone && !dm.linkedin_url && (
+                              <span className="text-xs text-outline italic">Profile found, awaiting direct inbox</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
+                      <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
+                      <span className="text-sm text-on-surface-variant font-medium">Proxycurl search yielded no results.</span>
+                      <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
+                    </div>
+                  )}
                 </div>
-              </section>
+              </div>
+            </section>
 
             {/* Section: Outreach Intelligence */}
                           <section className="group">
