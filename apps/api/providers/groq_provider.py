@@ -3,6 +3,7 @@ import json
 import time
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
+from core.provider_health import report_provider_state
 
 
 # ── Output schema (identical to the old Gemini schema so worker.py needs no changes) ──
@@ -43,7 +44,7 @@ class GroqProvider:
     Drop-in replacement for GeminiProvider. Same output schema.
     """
 
-    MODEL = "qwen/qwen3.6-27b"   # Best reasoning model on this Groq account
+    MODEL = "qwen/qwen3.8-27b"   # Best reasoning model on this Groq account, avoids OTPM limits
 
     def __init__(self):
         self.api_key = os.environ.get("GROQ_API_KEY", "").strip()
@@ -53,6 +54,7 @@ class GroqProvider:
     def _get_client(self):
         if self._client is None:
             if not self.api_key:
+                report_provider_state("groq", "not_configured", "GROQ_API_KEY is missing.")
                 raise RuntimeError("GROQ_API_KEY is not set. Get a free key at https://console.groq.com/keys")
             from groq import Groq
             self._client = Groq(api_key=self.api_key)
@@ -105,8 +107,9 @@ Analyze this business and return the JSON dossier:"""
                     lambda: client.chat.completions.create(
                         model=self.model_name,
                         messages=[{"role": "user", "content": prompt}],
-                        temperature=0.3,
-                        max_tokens=4096,
+                        response_format={"type": "json_object"},
+                        temperature=0.2,
+                        max_tokens=1000,
                     ),
                 )
                 raw = response.choices[0].message.content
@@ -124,11 +127,15 @@ Analyze this business and return the JSON dossier:"""
                 result_json = json.loads(raw_clean)
                 # Validate and coerce through Pydantic
                 parsed = AISDROutput.model_validate(result_json)
+                report_provider_state("groq", "active", "AI analysis completed.", 200)
                 return parsed.model_dump()
 
             except Exception as e:
                 err_str = str(e)
                 print(f"GroqProvider: API error (attempt {attempt + 1}): {err_str[:200]}")
+                lowered = err_str.lower()
+                state = "cooldown" if "429" in err_str or "rate limit" in lowered or "rate_limit" in lowered else "invalid_key" if "401" in err_str else "exhausted" if any(code in err_str for code in ("402", "403")) else "unavailable"
+                report_provider_state("groq", state, f"AI analysis failed: {err_str[:180]}")
                 if 'raw_clean' in locals():
                     print(f"Debug raw_clean: {raw_clean!r}")
                 if attempt < 2 and ("429" in err_str or "rate_limit" in err_str.lower() or "rate limit" in err_str.lower()):

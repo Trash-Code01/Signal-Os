@@ -282,8 +282,8 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     stages = [
         {"key": "discovery",   "label": "Business Discovery & Deduplication", "status": discovery_status,   "count": discovered,   "total": total_target},
         {"key": "crawler",     "label": "Website Crawl & UX Audit",           "status": crawler_status,     "count": websites,     "total": discovered},
-        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": websites},
-        {"key": "enrichment",  "label": "Contact Enrichment",                 "status": enrichment_status,  "count": enriched,     "total": opportunities},
+        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": websites if websites > 0 else discovered},
+        {"key": "enrichment",  "label": "Contact Enrichment",                 "status": enrichment_status,  "count": enriched,     "total": discovered if discovered > 0 else total_target},
     ]
     
     return {
