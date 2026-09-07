@@ -120,11 +120,13 @@ export default function LeadDossier() {
   const evidenceSummary = detail.evidence_summary || "Crawl data and audit findings will appear here after research completes.";
   const socialProfiles = lead.social_profiles || [];
 
+  const contactsList = lead.contacts || [];
+
   // 1. Crawl Emails & Phones (Website & General Contacts)
-  const crawlEmails = React.useMemo(() => {
+  const crawlEmails: Array<{ email: string; sourceUrl?: string }> = (() => {
     const seen = new Set<string>();
     const list: Array<{ email: string; sourceUrl?: string }> = [];
-    (lead.contacts || []).forEach((c: any) => {
+    contactsList.forEach((c: any) => {
       if (c.email && !c.source?.includes("snovio") && !c.source?.includes("proxycurl") && !c.source?.includes("apollo")) {
         const clean = c.email.trim().toLowerCase();
         if (!seen.has(clean)) {
@@ -134,16 +136,16 @@ export default function LeadDossier() {
       }
     });
     return list;
-  }, [lead.contacts]);
+  })();
 
-  const crawlPhones = React.useMemo(() => {
+  const crawlPhones: string[] = (() => {
     const seen = new Set<string>();
     const list: string[] = [];
     if (lead.phone && lead.phone.trim()) {
       seen.add(lead.phone.trim());
       list.push(lead.phone.trim());
     }
-    (lead.contacts || []).forEach((c: any) => {
+    contactsList.forEach((c: any) => {
       const p = (c.phone || c.mobile || "").trim();
       if (p && !seen.has(p)) {
         seen.add(p);
@@ -151,13 +153,13 @@ export default function LeadDossier() {
       }
     });
     return list;
-  }, [lead.phone, lead.contacts]);
+  })();
 
   // 2. Snov.io Personal Emails
-  const snovioList = React.useMemo(() => {
+  const snovioList: any[] = (() => {
     const seen = new Set<string>();
     const list: any[] = [];
-    (lead.contacts || []).forEach((c: any) => {
+    contactsList.forEach((c: any) => {
       if (c.source?.includes("snovio")) {
         const email = (c.email || "").trim().toLowerCase();
         if (email && !seen.has(email)) {
@@ -170,13 +172,13 @@ export default function LeadDossier() {
       }
     });
     return list;
-  }, [lead.contacts]);
+  })();
 
   // 3. Owners & Decision Makers (Proxycurl + named leaders)
-  const decisionMakers = React.useMemo(() => {
+  const decisionMakers: any[] = (() => {
     const seen = new Set<string>();
     const list: any[] = [];
-    (lead.contacts || []).forEach((c: any) => {
+    contactsList.forEach((c: any) => {
       const name = (c.name || "").trim();
       const hasValidName = name && name !== "Unknown" && name !== "Unknown contact" && c.contact_type !== "company";
       const isExecutive = c.source?.includes("proxycurl") || c.source?.includes("apollo") || 
@@ -194,7 +196,7 @@ export default function LeadDossier() {
       }
     });
     return list;
-  }, [lead.contacts]);
+  })();
 
   return (
     <div className="lead-dossier-page min-h-screen bg-[#141313] text-on-surface text-sm flex flex-col animate-in fade-in duration-500">
