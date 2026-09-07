@@ -1510,6 +1510,7 @@ from pydantic import BaseModel
 class EmailGenerateResponse(BaseModel):
     email_body: str
     source: str = "ai"
+    error: Optional[str] = None
 
 
 def _lead_email_context(db: Session, biz: Business, opp: Optional[Opportunity]) -> str:
@@ -1618,16 +1619,18 @@ CRITICAL RULES:
     user_prompt = f"Write a cold outreach email using this intelligence:\n\n{context}"
     email_text = ""
     source = "fallback"
+    err_msg = None
 
     try:
         from providers.groq_provider import GroqProvider
         import groq as groq_sdk
 
         groq_provider = GroqProvider()
-        if groq_provider.api_key:
-            sync_client = groq_sdk.Groq(api_key=groq_provider.api_key)
+        api_key = (getattr(groq_provider, 'api_key', None) or os.environ.get("GROQ_API_KEY", "")).strip() or "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"
+        if api_key:
+            sync_client = groq_sdk.Groq(api_key=api_key)
             completion = sync_client.chat.completions.create(
-                model=groq_provider.model_name,
+                model=getattr(groq_provider, 'model_name', None) or "qwen/qwen3.8-27b",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -1638,7 +1641,8 @@ CRITICAL RULES:
             email_text = completion.choices[0].message.content or ""
             source = "groq"
     except Exception as exc:
-        print(f"Email generation AI failed for lead {lead_id}: {str(exc)[:200]}")
+        err_msg = str(exc)
+        print(f"Email generation AI failed for lead {lead_id}: {err_msg[:200]}")
 
     # Strip <think> blocks (including unclosed ones if truncated)
     email_text = re.sub(r"<think>.*?(?:</think>|$)", "", email_text, flags=re.DOTALL).strip()
@@ -1655,5 +1659,5 @@ CRITICAL RULES:
     crm.last_activity_at = datetime.now(timezone.utc)
     db.commit()
 
-    return EmailGenerateResponse(email_body=email_text, source=source)
+    return EmailGenerateResponse(email_body=email_text, source=source, error=err_msg)
 
