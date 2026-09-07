@@ -1495,18 +1495,22 @@ def _lead_email_context(db: Session, biz: Business, opp: Optional[Opportunity]) 
 
 def _fallback_personalized_email(biz: Business, opp: Optional[Opportunity]) -> str:
     business_name = _clean_text(biz.name) or "your business"
-    first_problem = _clean_text(opp.primary_problem if opp else "") or "a few conversion gaps on your website"
-    offer = _clean_text(opp.recommended_offer if opp else "") or "a cleaner lead-capture system"
+    first_problem = _clean_text(opp.primary_problem if opp else "") or "a few conversion gaps in your visitor booking flow"
+    offer = _clean_text(opp.recommended_offer if opp else "") or "a high-converting digital booking funnel"
     location = _clean_text(", ".join(part for part in [biz.city, biz.country] if part))
-    subject = f"Subject: Quick idea for {business_name}"
+    subject = f"Subject: quick idea for {business_name}"
     intro_location = f" in {location}" if location else ""
     return (
         f"{subject}\n\n"
         f"Hi,\n\n"
-        f"I was reviewing {business_name}{intro_location} and noticed {first_problem}. "
-        f"Devacia can help with {offer}, so visitors have a clearer path to contact, book, or request a quote.\n\n"
-        f"Would a quick 15-minute call this week make sense?\n\n"
-        f"Laraib | Devacia"
+        f"I was taking a look at {business_name}{intro_location} and noticed {first_problem}.\n\n"
+        f"At Devacia, we build custom high-converting web applications and {offer} that turn high-intent mobile visitors directly into paying customers without operational friction.\n\n"
+        f"Open to seeing a 2-minute video breakdown of how we'd streamline this for {business_name}?\n\n"
+        f"Best,\n"
+        f"Laraib Asjed\n"
+        f"Founder | Devacia\n"
+        f"📧 hello@devacia.com\n"
+        f"🌐 www.devacia.com"
     )
 
 @app.post("/api/leads/{lead_id}/generate-email", response_model=EmailGenerateResponse)
@@ -1515,19 +1519,31 @@ def generate_lead_email(lead_id: int, db: Session = Depends(get_db)):
     opp = db.query(Opportunity).filter(Opportunity.business_id == biz.id).first()
     context = _lead_email_context(db, biz, opp)
     
-    system_prompt = """You are an elite Sales Development Representative (SDR) writing for Devacia, a web development and digital marketing agency.
+    system_prompt = """You are a world-class elite Cold Email SDR and Conversion Copywriter working for Devacia (a premier web development & conversion engineering agency).
 
-Your task: Write a SHORT, high-converting cold outreach email.
+Your mission: Write a hyper-personalized, top-1% cold outreach email that gets 40%+ reply rates from busy founders and owners.
 
-Rules:
-1. Address the decision maker by first name if known, otherwise use a natural greeting.
-2. Reference their SPECIFIC business and location (show you did your homework).
-3. Mention one specific digital gap or opportunity you spotted (e.g., no website, no booking system, slow mobile).
-4. Offer a single clear value proposition from Devacia.
-5. Include a low-friction CTA (e.g., "Would a 15-minute call this week work?").
-6. Keep it under 150 words. No fluff. No generic phrases.
-7. Format: Subject line first, then the email body. No placeholders like [Your Name].
-8. Sign off as: Laraib | Devacia"""
+Framework for High-Converting Outreach:
+1. SUBJECT LINE: Short (2-4 words), lower-case or natural, curiosity-evoking, referencing their business (e.g., 'quick question re: {business_name}', '{business_name} mobile flow', 'idea for {business_name}').
+2. GREETING: Natural greeting. If decision maker's name is known, address them by first name (e.g. 'Hi Chris,'). Otherwise 'Hi there,'.
+3. THE HOOK (1-2 sentences): Acknowledge or compliment their brand specifically. Show you actually looked at their business/site without sounding like a robotic scraper.
+4. THE GAP / CONCRETE OBSERVATION (2-3 sentences): Point out a precise friction point discovered during the audit (e.g., lack of mobile-first reservation system, no sticky phone CTA on mobile, friction in visitor booking/inquiry flow, or outdated digital presence). Quantify the impact (e.g., losing high-intent local mobile traffic to competitors).
+5. THE DEVACIA SOLUTION & VALUE (1-2 sentences): Explain concisely how Devacia fixes this by building custom high-conversion booking engines, fast mobile-first digital funnels, or frictionless reservation systems that convert visitors directly into revenue.
+6. SOFT, ZERO-PRESSURE CTA (1 sentence): Low friction (e.g., 'Open to seeing a 2-minute video mockup of how we would streamline this for {business_name}?', or 'Would it make sense to connect for 10 minutes this week?').
+7. SIGNATURE: MUST end strictly with this EXACT sign-off:
+
+Best,
+Laraib Asjed
+Founder | Devacia
+📧 hello@devacia.com
+🌐 www.devacia.com
+
+CRITICAL RULES:
+- Line 1 must be 'Subject: [Subject text]', followed by an empty line, then the email body.
+- Tone: Professional, peer-to-peer, conversational, crisp, confident. NEVER sound needy or like a generic automated template.
+- Length: Crisp and punchy (around 100-140 words).
+- No placeholders like [Insert Name]. Use real details from the prompt.
+"""
 
     user_prompt = f"Write a cold outreach email using this intelligence:\n\n{context}"
     email_text = ""
@@ -1547,7 +1563,7 @@ Rules:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.7,
-                max_tokens=2048
+                max_tokens=1000
             )
             email_text = completion.choices[0].message.content or ""
             source = "groq"

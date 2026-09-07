@@ -105,6 +105,22 @@ export default function LeadDossier() {
   const generatedEmailActivity = (lead.activities || []).find((a: any) => a.type === "generated_email");
   const generatedEmail = generatedEmailActivity ? generatedEmailActivity.body : null;
 
+  const parsedEmail = (() => {
+    if (!generatedEmail) return { subject: "", body: "" };
+    const match = generatedEmail.match(/^Subject:\s*(.*?)(?:\r?\n\r?\n|\r?\n)([\s\S]*)$/i);
+    if (match) {
+      return { subject: match[1].trim(), body: match[2].trim() };
+    }
+    const lines = generatedEmail.split(/\r?\n/);
+    if (lines.length > 1 && lines[0].toLowerCase().startsWith("subject:")) {
+      return {
+        subject: lines[0].replace(/^subject:\s*/i, "").trim(),
+        body: lines.slice(1).join("\n").trim()
+      };
+    }
+    return { subject: "", body: generatedEmail.trim() };
+  })();
+
   const websiteHref = lead.website_url
     ? lead.website_url.startsWith("http")
       ? lead.website_url
@@ -575,21 +591,71 @@ export default function LeadDossier() {
                     )}
 
                     {generatedEmail && (
-                      <div className="mt-6">
-                        <div className="flex items-center justify-between mb-3">
+                      <div className="mt-6 space-y-3">
+                        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                           <h3 className="text-[11px] font-semibold text-[#4ade80] uppercase tracking-widest flex items-center gap-2">
                             <span className="material-symbols-outlined text-[16px]">auto_awesome</span> AI-GENERATED OUTREACH EMAIL
                           </h3>
-                          <button 
-                            onClick={() => handleCopy(generatedEmail, "generated_email")}
-                            className="text-xs text-outline hover:text-[#4ade80] border border-outline-variant/40 px-3 py-1.5 rounded transition-all flex items-center gap-1 active:scale-95 bg-surface-container-low hover:bg-surface-container"
-                          >
-                            <span className="material-symbols-outlined text-[14px]">{copiedId === "generated_email" ? "check" : "content_copy"}</span> 
-                            {copiedId === "generated_email" ? "Copied!" : "Copy"}
-                          </button>
+                          <div className="flex items-center flex-wrap gap-2">
+                            {parsedEmail.subject && (
+                              <button 
+                                onClick={() => handleCopy(parsedEmail.subject, "copy_subject")}
+                                className="text-xs text-outline hover:text-[#4ade80] border border-outline-variant/40 px-2.5 py-1.5 rounded transition-all flex items-center gap-1.5 active:scale-95 bg-surface-container-low hover:bg-surface-container"
+                                title="Copy Subject Line only"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">
+                                  {copiedId === "copy_subject" ? "check" : "title"}
+                                </span> 
+                                {copiedId === "copy_subject" ? "Subject Copied!" : "Copy Subject"}
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => handleCopy(parsedEmail.body || generatedEmail, "copy_body")}
+                              className="text-xs text-outline hover:text-[#4ade80] border border-outline-variant/40 px-2.5 py-1.5 rounded transition-all flex items-center gap-1.5 active:scale-95 bg-surface-container-low hover:bg-surface-container"
+                              title="Copy Email Body only"
+                            >
+                              <span className="material-symbols-outlined text-[14px]">
+                                {copiedId === "copy_body" ? "check" : "article"}
+                              </span> 
+                              {copiedId === "copy_body" ? "Body Copied!" : "Copy Body"}
+                            </button>
+                            <button 
+                              onClick={() => handleCopy(generatedEmail, "generated_email")}
+                              className="text-xs text-outline hover:text-[#4ade80] border border-outline-variant/40 px-2.5 py-1.5 rounded transition-all flex items-center gap-1.5 active:scale-95 bg-surface-container-low hover:bg-surface-container font-medium"
+                              title="Copy Full Email with Subject"
+                            >
+                              <span className="material-symbols-outlined text-[14px]">
+                                {copiedId === "generated_email" ? "check" : "content_copy"}
+                              </span> 
+                              {copiedId === "generated_email" ? "All Copied!" : "Copy All"}
+                            </button>
+                          </div>
                         </div>
+
+                        {/* Subject preview box */}
+                        {parsedEmail.subject && (
+                          <div className="bg-[#1a1919] border border-outline-variant/20 rounded-lg p-3.5 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <span className="text-[10px] uppercase tracking-wider text-outline font-semibold block mb-0.5">Subject</span>
+                              <span className="text-sm font-medium text-primary font-serif">{parsedEmail.subject}</span>
+                            </div>
+                            <button
+                              onClick={() => handleCopy(parsedEmail.subject, "copy_subject_inline")}
+                              className="text-outline hover:text-[#4ade80] p-1.5 rounded hover:bg-surface-container shrink-0 transition-colors"
+                              title="Copy Subject"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">
+                                {copiedId === "copy_subject_inline" ? "check" : "content_copy"}
+                              </span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Email Body preview box */}
                         <div className="bg-[#1a1919] border border-outline-variant/20 rounded-lg p-5">
-                          <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap font-serif">{generatedEmail}</p>
+                          <p className="text-sm leading-relaxed text-on-surface whitespace-pre-wrap font-serif">
+                            {parsedEmail.body || generatedEmail}
+                          </p>
                         </div>
                       </div>
                     )}
