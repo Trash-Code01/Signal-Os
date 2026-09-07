@@ -95,24 +95,34 @@ Analyze this business and return the JSON dossier:"""
             return None
 
         prompt = self._build_prompt(evidence, industry_config)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Devacia-SDR/1.0",
+        }
+        payload = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": 1000,
+        }
 
         for attempt in range(3):
             try:
-                client = self._get_client()
-                # Groq SDK is synchronous — run in executor to keep async interface
-                import asyncio
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: client.chat.completions.create(
-                        model=self.model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        response_format={"type": "json_object"},
-                        temperature=0.2,
-                        max_tokens=1000,
-                    ),
-                )
-                raw = response.choices[0].message.content
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        json=payload,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=45),
+                    ) as resp:
+                        if resp.status != 200:
+                            err_body = await resp.text()
+                            raise RuntimeError(f"HTTP {resp.status}: {err_body[:200]}")
+                        data = await resp.json()
+                        raw = data["choices"][0]["message"]["content"]
                 
                 # Strip out Qwen <think> blocks if present
                 import re as re_lib

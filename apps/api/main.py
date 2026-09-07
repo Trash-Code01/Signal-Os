@@ -1623,23 +1623,38 @@ CRITICAL RULES:
 
     try:
         from providers.groq_provider import GroqProvider
-        import groq as groq_sdk
+        import requests
 
         groq_provider = GroqProvider()
         api_key = (getattr(groq_provider, 'api_key', None) or os.environ.get("GROQ_API_KEY", "")).strip() or "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"
         if api_key:
-            sync_client = groq_sdk.Groq(api_key=api_key)
-            completion = sync_client.chat.completions.create(
-                model=getattr(groq_provider, 'model_name', None) or "qwen/qwen3.8-27b",
-                messages=[
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Devacia-SDR/1.0",
+            }
+            payload = {
+                "model": getattr(groq_provider, 'model_name', None) or "qwen/qwen3.8-27b",
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.7,
-                max_tokens=1000
+                "temperature": 0.7,
+                "max_tokens": 1000,
+            }
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=30
             )
-            email_text = completion.choices[0].message.content or ""
-            source = "groq"
+            if resp.status_code == 200:
+                data = resp.json()
+                email_text = data["choices"][0]["message"]["content"] or ""
+                source = "groq"
+            else:
+                err_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                print(f"Groq API error for lead {lead_id}: {err_msg}")
     except Exception as exc:
         err_msg = str(exc)
         print(f"Email generation AI failed for lead {lead_id}: {err_msg[:200]}")
