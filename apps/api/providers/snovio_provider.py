@@ -1,4 +1,4 @@
-﻿import os
+import os
 import aiohttp
 from typing import List, Dict, Any, Optional
 from core.providers import EmailProvider
@@ -6,8 +6,8 @@ from core.provider_health import report_provider_state
 
 class SnovioProvider(EmailProvider):
     def __init__(self, db_session=None):
-        self.client_id = os.environ.get('SNOVIO_CLIENT_ID', '').strip()
-        self.client_secret = os.environ.get('SNOVIO_CLIENT_SECRET', '').strip()
+        self.client_id = os.environ.get('SNOVIO_CLIENT_ID', '').strip() or 'f871e0b0cf72fb33112ea91156db3d16'
+        self.client_secret = os.environ.get('SNOVIO_CLIENT_SECRET', '').strip() or '4ab8e5759eba0ab968c7320709fced93'
         self.base_url = "https://api.snov.io"
         self._token = None
 

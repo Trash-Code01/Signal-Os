@@ -47,7 +47,7 @@ class GroqProvider:
     MODEL = "qwen/qwen3.8-27b"   # Best reasoning model on this Groq account, avoids OTPM limits
 
     def __init__(self):
-        self.api_key = os.environ.get("GROQ_API_KEY", "").strip()
+        self.api_key = os.environ.get("GROQ_API_KEY", "").strip() or "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"
         self.model_name = os.environ.get("GROQ_MODEL", self.MODEL)
         self._client = None
 
