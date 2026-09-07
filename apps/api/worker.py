@@ -36,7 +36,6 @@ from engines.website_intelligence import WebsiteIntelligenceEngine
 from providers.snovio_provider import SnovioProvider
 from providers.discovery_factory import get_discovery_provider
 from providers.groq_provider import GroqProvider
-from providers.hunter_provider import HunterProvider
 from providers.proxycurl_provider import ProxycurlProvider
 
 
@@ -112,6 +111,11 @@ def _existing_business(db, data: Dict[str, Any]) -> Optional[Business]:
             return match
     website = data.get("website_url")
     if website:
+        domain = _domain(website)
+        if domain:
+            match = db.query(Business).filter(Business.website_domain == domain).first()
+            if match:
+                return match
         match = db.query(Business).filter(Business.website_url == website).first()
         if match:
             return match
@@ -162,7 +166,7 @@ def _save_contact(db, business_id: int, data: Dict[str, Any]) -> bool:
                 
     # 4. Match by direct phone. Do not collapse separate inboxes merely
     # because they share the same company phone number.
-    if not match and phone:
+    if not match and phone and not (first_name and last_name):
         match = next((
             c for c in existing_contacts
             if ((c.phone and c.phone == phone) or (c.mobile and c.mobile == phone))
@@ -309,8 +313,20 @@ def _persist_website_research(db, business: Business, audit: Dict[str, Any]) -> 
     _save_social_profiles(db, business, audit.get("social_profiles") or [])
 
     page_map: Dict[str, int] = {}
+    page_details = {
+        (detail.get("url") or "").rstrip("/"): detail
+        for detail in audit.get("page_details") or []
+        if detail.get("url")
+    }
     for page_url in audit.get("pages_checked") or []:
-        page = WebsitePage(website_id=website.id, url=page_url, page_type=_page_type(page_url), status_code=200)
+        detail = page_details.get(page_url.rstrip("/"), {})
+        page = WebsitePage(
+            website_id=website.id,
+            url=page_url,
+            page_type=detail.get("page_type") or _page_type(page_url),
+            title=detail.get("title"),
+            status_code=detail.get("status_code") or 200,
+        )
         db.add(page)
         db.flush()
         page_map[page_url] = page.id
@@ -384,14 +400,110 @@ def _save_social_profiles(db, business: Business, profiles: List[Dict[str, Any]]
     return saved
 
 
+def _qualify_no_website_business(db, business: Business) -> int:
+    """Qualify a business with no usable website and still research its people.
+
+    A missing website is itself a high-signal prospect.  It must not cause the
+    contact-enrichment workflow to stop: public search can still identify
+    owners, titles, LinkedIn profiles, and a callable business number.
+    """
+    db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
+    db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
+    db.query(Score).filter(Score.business_id == business.id).delete()
+
+    opportunity = Opportunity(
+        business_id=business.id,
+        primary_problem="No official website or usable digital home was found",
+        problems=[
+            "No official website was found during business discovery",
+            "Potential customers have no owned web destination to learn, enquire, or book",
+        ],
+        recommended_offer="Launch-ready website and local lead-capture setup",
+        ticket_low=2000,
+        ticket_high=5000,
+        outreach_angle=(
+            f"{business.name} appears to have no official website, so local customers may be "
+            "forced to rely on third-party listings instead of a direct path to call or enquire."
+        ),
+        ai_reasoning="Qualified from discovery evidence: no official website was found. Public contact research continues independently.",
+        confidence="high",
+    )
+    db.add(opportunity)
+    db.flush()
+    db.add(Score(
+        business_id=business.id,
+        commercial_score=100,
+        data_confidence=80,
+        grade="A+",
+        business_fit=100,
+        digital_gap=100,
+        offer_fit=100,
+        buying_intent=80,
+        contactability=50 if business.primary_phone else 20,
+        score_version="v2-no-website",
+    ))
+    db.add(AIAnalysis(
+        business_id=business.id,
+        opportunity_id=opportunity.id,
+        model_name="deterministic_rule",
+        prompt_template="no_website_rule_with_public_contact_research",
+        parsed_output={"confidence": "high", "primary_problem": "No official website found"},
+    ))
+    _set_business_status(db, business, "qualified")
+
+    from providers.serper_search_provider import SerperSearchProvider
+
+    public_contacts = asyncio.run(
+        SerperSearchProvider().search_decision_makers(business.name, business.city)
+    )
+    saved_contacts = 0
+    for contact in public_contacts:
+        contact["source"] = contact.get("source") or "google_search_fallback"
+        saved_contacts += int(_save_contact(db, business.id, contact))
+
+    db.add(CRMActivity(
+        business_id=business.id,
+        activity_type="qualified",
+        body=(
+            "Qualified as a no-website opportunity. Public contact research found "
+            f"{saved_contacts} new decision-maker record(s); the business phone remains available as a fallback."
+        ),
+        created_by="Lead Intelligence",
+    ))
+    db.commit()
+    return saved_contacts
+
+
 @celery_app.task
 def enrich_lead_contacts_task(business_id: int):
-    """Refresh a CRM lead's Apollo decision-makers and public social links."""
+    """Refresh public, Snov.io, and Proxycurl contact intelligence for a CRM lead."""
     db = SessionLocal()
     try:
         business = db.query(Business).filter(Business.id == business_id).first()
-        if not business or not business.website_url:
-            return {"status": "skipped", "reason": "Lead has no website"}
+        if not business:
+            return {"status": "skipped", "reason": "Lead not found"}
+
+        # No-website leads still deserve owner/decision-maker research.  The
+        # prior implementation returned early here, leaving the highest-value
+        # web-design prospects with no follow-up intelligence.
+        if not business.website_url:
+            from providers.serper_search_provider import SerperSearchProvider
+
+            contacts = asyncio.run(
+                SerperSearchProvider().search_decision_makers(business.name, business.city)
+            )
+            saved = sum(int(_save_contact(db, business.id, contact)) for contact in contacts)
+            db.add(CRMActivity(
+                business_id=business.id,
+                activity_type="enrichment",
+                body=(
+                    "No website is attached to this business, so contact research used public business and "
+                    f"leadership results instead. {saved} new decision-maker record(s) were added."
+                ),
+                created_by="Lead Intelligence",
+            ))
+            db.commit()
+            return {"status": "completed", "contacts_added": saved, "mode": "no_website_public_research"}
         
         try:
             audit = asyncio.run(asyncio.wait_for(WebsiteIntelligenceEngine().audit_website(business.website_url), timeout=240.0))
@@ -538,7 +650,7 @@ def process_campaign_task(campaign_id: int):
                 limit=min(per_location_limit, remaining),
             )))
 
-        dedupe = DeduplicationEngine(db_session=db)
+        dedupe = DeduplicationEngine()
         unique_businesses = dedupe.deduplicate(raw_businesses)[:discovery_needed]
         saved_businesses: List[Business] = list(resumable_businesses)
         for raw in unique_businesses:
@@ -567,6 +679,7 @@ def process_campaign_task(campaign_id: int):
                 longitude=raw.get("longitude"),
                 primary_phone=raw.get("primary_phone"),
                 website_url=raw.get("website_url"),
+                website_domain=_domain(raw.get("website_url")),
                 google_place_id=str(raw.get("google_place_id")) if raw.get("google_place_id") else None,
                 rating=raw.get("rating"),
                 review_count=raw.get("review_count"),
@@ -587,7 +700,6 @@ def process_campaign_task(campaign_id: int):
         crawler = WebsiteIntelligenceEngine()
         scorer = ScoringEngine(industry_config)
         ai_sdr = GroqProvider()
-        hunter = HunterProvider()
         proxycurl = ProxycurlProvider()
         snovio = SnovioProvider(db_session=db)
         qualified_count = 0
@@ -596,65 +708,8 @@ def process_campaign_task(campaign_id: int):
 
         for business in saved_businesses:
             if not business.website_url:
-                # Auto-qualify businesses without a website as high-value web design leads
-                
-                # Clean up old records before creating new ones on a re-run
-                db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
-                db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
-                db.query(Score).filter(Score.business_id == business.id).delete()
-                
-                opportunity = Opportunity(
-                    business_id=business.id,
-                    primary_problem="No digital presence / Missing website",
-                    recommended_offer=f"Full website design and digital presence setup",
-                    ticket_low=2000,
-                    ticket_high=5000,
-                    outreach_angle=f"I noticed {business.name} doesn't have a website. This is costing you local customers."
-                )
-                db.add(opportunity)
-                db.flush()
-                
-                db.add(Score(
-                    business_id=business.id,
-                    commercial_score=100,
-                    data_confidence=100,
-                    grade="A+",
-                    business_fit=100,
-                    digital_gap=100,
-                    offer_fit=100,
-                    buying_intent=100,
-                    contactability=50
-                ))
-                
-                db.add(AIAnalysis(
-                    business_id=business.id,
-                    opportunity_id=opportunity.id,
-                    model_name="deterministic_rule",
-                    prompt_template="no_website_rule",
-                    parsed_output={"confidence": "high", "primary_problem": "No website"}
-                ))
-                
-                _set_business_status(db, business, "qualified")
-                crm_lead = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
-                if not crm_lead:
-                    db.add(CRMLead(business_id=business.id, stage="qualified", source="campaign"))
-                db.add(CRMActivity(
-                    business_id=business.id,
-                    activity_type="qualified",
-                    body="Auto-qualified: Business has no website. High value lead for web design."
-                ))
-                db.commit()
+                enriched_count += _qualify_no_website_business(db, business)
                 qualified_count += 1
-                
-                # Google Search fallback for No Website
-                from providers.serper_search_provider import SerperSearchProvider
-                serper_search = SerperSearchProvider()
-                search_results = asyncio.run(serper_search.search_decision_makers(business.name, business.city))
-                if search_results:
-                    for contact in search_results:
-                        contact["source"] = "google_search_fallback"
-                        _save_contact(db, business.id, contact)
-                
                 continue
 
             try:
@@ -663,10 +718,11 @@ def process_campaign_task(campaign_id: int):
                 if _is_junk_website(business.website_url):
                     print(f"Skipping junk website for {business.name}: {business.website_url}")
                     business.website_url = None
-                    db.commit()
-                    # Fall through to no-website branch on next iteration (re-queue)
-                    _set_business_status(db, business, "researching")
-                    db.commit()
+                    # A directory/social link is not an official site. Process
+                    # it as a no-website lead in this same run instead of
+                    # re-queuing it and silently losing the contact work.
+                    enriched_count += _qualify_no_website_business(db, business)
+                    qualified_count += 1
                     continue
 
                 audit = asyncio.run(asyncio.wait_for(crawler.audit_website(business.website_url), timeout=240.0))
@@ -719,7 +775,7 @@ def process_campaign_task(campaign_id: int):
 
             domain = _domain(business.website_url)
             if domain:
-                provider_contacts = asyncio.run(hunter.find_emails(domain=domain))
+                provider_contacts: List[Dict[str, Any]] = []
                 
                 # 2. Serper Google-result fallback if no named professional exists
                 from providers.serper_search_provider import SerperSearchProvider

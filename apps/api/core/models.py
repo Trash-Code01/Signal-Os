@@ -28,18 +28,20 @@ class DevaciaOffer(Base):
     description = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class ProviderAccount(Base):
-    __tablename__ = "provider_accounts"
+class ProviderHealth(Base):
+    """Last known state of an external enrichment provider.
+
+    API credentials intentionally do not live in this table.  Render remains
+    the source of truth for secrets; this model only gives the UI a durable,
+    actionable explanation when a provider is rate-limited or out of credits.
+    """
+    __tablename__ = "provider_health"
     id = Column(Integer, primary_key=True, index=True)
-    provider_name = Column(String(100), nullable=False) # e.g., apollo, hunter, dataforseo
-    account_name = Column(String(255))
-    api_key_ref = Column(String(255)) # reference to secret or env var
-    status = Column(String(50), default="active") # active, cooldown, exhausted, failed
-    usage_today = Column(Integer, default=0)
-    limit_per_day = Column(Integer)
-    last_request_at = Column(DateTime(timezone=True))
-    cooldown_until = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    provider_name = Column(String(100), nullable=False, unique=True, index=True)
+    state = Column(String(50), nullable=False, default="unknown")
+    message = Column(Text)
+    last_http_status = Column(Integer)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 # ==========================================
 # CAMPAIGN
@@ -106,6 +108,7 @@ class Business(Base):
     
     primary_phone = Column(String(100))
     website_url = Column(String(2048))
+    website_domain = Column(String(255), index=True)
     google_place_id = Column(String(255))
     rating = Column(Float)
     review_count = Column(Integer)
@@ -235,7 +238,7 @@ class DecisionMaker(Base):
     contact_type = Column(String(50)) # professional, personal
     verification_status = Column(String(50)) # verified, risky, unknown
     confidence = Column(Float)
-    source = Column(String(100)) # e.g. apollo, hunter, website_public, brave_search
+    source = Column(String(100)) # e.g. snovio, proxycurl, website_crawl, public_search
     source_url = Column(String(2048)) # Specific URL where the contact was found (e.g. LinkedIn or About page)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

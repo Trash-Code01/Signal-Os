@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import aiohttp
+from core.provider_health import report_provider_state
 
 class SerperSearchProvider:
     """Public Google-result fallback for decision-maker discovery."""
@@ -15,6 +16,8 @@ class SerperSearchProvider:
 
     async def search_decision_makers(self, business_name: str, city: Optional[str] = None, official_domain: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self.api_key or not business_name:
+            if not self.api_key:
+                report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing.")
             return []
 
         location = (city or "").strip()
@@ -34,8 +37,11 @@ class SerperSearchProvider:
                 try:
                     async with session.post(self.base_url, json={"q": query, "num": 10}) as response:
                         if response.status != 200:
+                            state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
+                            report_provider_state("serper", state, f"Public decision-maker search failed ({response.status}).", response.status)
                             continue
                         payload = await response.json()
+                        report_provider_state("serper", "active", "Public decision-maker search completed.", response.status)
                 except Exception:
                     continue
                 for result in payload.get("organic") or []:
@@ -51,7 +57,9 @@ class SerperSearchProvider:
                         contacts.append(contact)
                         
         deduped = self._dedupe(contacts)
-        return deduped[:1]
+        # Keep the full verified result set so the dossier can show every
+        # owner/decision maker and their role, not just the first match.
+        return deduped[:5]
 
     @staticmethod
     def _is_valid_person_name(first_name: str, last_name: str, business_name: str) -> bool:

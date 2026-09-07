@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 from typing import List, Dict, Any, Optional
 from core.providers import BusinessDiscoveryProvider
+from core.provider_health import report_provider_state
 
 # Domains that are NEVER a valid local business website — always skip these
 JUNK_WEBSITE_DOMAINS = {
@@ -87,6 +88,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
 
         if not self.api_key:
             print("Serper API key missing. Returning empty list.")
+            report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing.")
             return []
 
         # Infer the country from the location string so businesses are tagged correctly
@@ -115,10 +117,13 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
 
                         if response.status != 200:
                             print(f"Serper error {response.status}: {data}")
+                            state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
+                            report_provider_state("serper", state, f"Business discovery failed ({response.status}).", response.status)
                             return []
 
                         places = data.get("places", [])
                         if places:
+                            report_provider_state("serper", "active", "Business discovery completed.", response.status)
                             break
 
                         if attempt == 0:

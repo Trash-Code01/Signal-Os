@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from core.models import Base, Campaign, CampaignLocation, IndustryConfig, ProviderAccount, JobRun, Business, BusinessSource, DecisionMaker, Score, Opportunity, CRMLead, CRMActivity
+from core.models import Base, Campaign, CampaignLocation, IndustryConfig, JobRun, Business, BusinessSource, DecisionMaker, Score, Opportunity, CRMLead, CRMActivity
 
 # Local DB URL
 LOCAL_DB_URL = "postgresql+psycopg://devacia:devacia_password@postgres:5432/devacia_os"
@@ -62,7 +62,6 @@ try:
     # Order matters for foreign keys
     tables_to_copy = [
         IndustryConfig,
-        ProviderAccount,
         Campaign,
         CampaignLocation,
         JobRun,

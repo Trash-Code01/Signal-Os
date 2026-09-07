@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 import re
 import urllib.parse
 import aiohttp
@@ -33,6 +34,7 @@ class WebsiteIntelligenceEngine:
             "is_live": False,
             "has_ssl": start_url.startswith("https"),
             "pages_checked": [],
+            "page_details": [],
             "emails": set(),
             "phones": set(),
             "social_profiles": {},
@@ -41,6 +43,7 @@ class WebsiteIntelligenceEngine:
             "booking_detected": False,
             "ecommerce_detected": False,
             "mobile_responsive": False, # Will detect below
+            "responsive_evidence": [],
             "contact_form": False,
             "quote_form": False,
             "phone_cta": False,
@@ -61,7 +64,7 @@ class WebsiteIntelligenceEngine:
                     queue.sort(key=lambda item: self._page_priority(item[0]))
                     current_url, depth = queue.pop(0)
                     
-                    normalized_url = current_url.split('#')[0].rstrip('/')
+                    normalized_url = self._normalise_url(current_url)
                     if normalized_url in visited:
                         continue
                         
@@ -80,7 +83,8 @@ class WebsiteIntelligenceEngine:
                             
                             html = await response.text()
                             findings["is_live"] = True
-                            findings["pages_checked"].append(current_url)
+                            final_url = str(response.url)
+                            findings["pages_checked"].append(final_url)
                             
                             soup = BeautifulSoup(html, "html.parser")
                             
@@ -90,17 +94,19 @@ class WebsiteIntelligenceEngine:
                             
                             text = soup.get_text(separator=" ", strip=True)
                             
-                            self._extract_from_html(current_url, html, text, soup, findings)
+                            page_detail = self._extract_from_html(final_url, html, text, soup, findings)
+                            page_detail["status_code"] = response.status
+                            findings["page_details"].append(page_detail)
                             
                             # Find internal links
                             if depth < self.max_depth:
                                 for a_tag in soup.find_all("a", href=True):
                                     href = a_tag["href"]
-                                    full_url = urllib.parse.urljoin(current_url, href)
+                                    full_url = urllib.parse.urljoin(final_url, href)
                                     if full_url.startswith('http'):
                                         link_domain = urllib.parse.urlparse(full_url).netloc
                                         if link_domain == base_domain:
-                                            queue.append((full_url, depth + 1))
+                                            queue.append((self._normalise_url(full_url), depth + 1))
                                             
                     except Exception as e:
                         print(f"[Crawler] Failed on {current_url}: {e}")
@@ -125,6 +131,14 @@ class WebsiteIntelligenceEngine:
                         "content": key,
                         "context": msg
                     })
+            if not findings["mobile_responsive"]:
+                findings["evidence"].append({
+                    "url": summary_url,
+                    "type": "mobile_responsiveness_risk",
+                    "content": "No standard mobile responsiveness signals were found in the pages crawled.",
+                    "context": "No viewport meta tag or responsive CSS framework/media query was detected. This is a crawl heuristic and should be visually verified.",
+                    "confidence": 0.7,
+                })
 
         findings["emails"] = list(findings["emails"])
         findings["phones"] = list(findings["phones"])
@@ -137,6 +151,19 @@ class WebsiteIntelligenceEngine:
 
         return findings
 
+    @staticmethod
+    def _normalise_url(url: str) -> str:
+        """Remove fragments and tracking parameters before adding crawl work."""
+        parsed = urllib.parse.urlsplit(url)
+        tracking = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        clean_query = [
+            (key, value) for key, value in query
+            if key.lower() not in tracking and not key.lower().startswith("utm_")
+        ]
+        path = parsed.path.rstrip("/") or "/"
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, urllib.parse.urlencode(clean_query), ""))
+
     def _page_priority(self, url: str) -> int:
         """Prioritize pages likely to have contact/booking info."""
         url_lower = url.lower()
@@ -146,13 +173,28 @@ class WebsiteIntelligenceEngine:
             return 1
         return 2
 
-    def _extract_from_html(self, url: str, html: str, text: str, soup: BeautifulSoup, findings: Dict[str, Any]):
+    def _extract_from_html(self, url: str, html: str, text: str, soup: BeautifulSoup, findings: Dict[str, Any]) -> Dict[str, Any]:
         html_lower = html.lower()
         text_lower = text.lower()
         
-        # Responsive detection
-        if 'name="viewport"' in html_lower or '@media' in html_lower or 'bootstrap' in html_lower or 'tailwind' in html_lower:
+        # Responsive detection is a transparent markup heuristic.  We report
+        # the exact signals collected rather than pretending this is a visual
+        # device test.
+        responsive_signals: List[str] = []
+        viewport = soup.find("meta", attrs={"name": re.compile(r"^viewport$", re.I)})
+        if viewport:
+            viewport_value = (viewport.get("content") or "").lower()
+            if "width=device-width" in viewport_value:
+                responsive_signals.append("viewport meta")
+        if re.search(r"@media\s*(?:only\s*)?\([^)]*(?:max|min)-width", html_lower):
+            responsive_signals.append("responsive media query")
+        if any(marker in html_lower for marker in ("bootstrap", "tailwind", "foundation", "bulma", "mui", "material-ui")):
+            responsive_signals.append("responsive framework")
+        if soup.find("picture") or soup.find(attrs={"srcset": True}):
+            responsive_signals.append("responsive images")
+        if responsive_signals:
             findings["mobile_responsive"] = True
+            findings["responsive_evidence"].append({"url": url, "signals": responsive_signals})
         
         # Technology Stack
         if "wordpress" in html_lower or "wp-content" in html_lower: findings["technology_stack"].add("WordPress")
@@ -164,6 +206,8 @@ class WebsiteIntelligenceEngine:
             findings["ecommerce_detected"] = True
         if "wix.com" in html_lower: findings["technology_stack"].add("Wix")
         if "squarespace" in html_lower: findings["technology_stack"].add("Squarespace")
+
+        self._extract_structured_data(url, soup, findings)
         
         # Booking engines
         booking_markers = ['calendly', 'acuity', 'mindbody', 'vagaro', 'fresha', 'janeapp', 'simplybook', 'setmore', 'boulevard', 'zenoti', 'opentable', 'resy']
@@ -233,6 +277,85 @@ class WebsiteIntelligenceEngine:
                 findings["quote_form"] = True
             if 'call' in btn_text or 'schedule' in btn_text:
                 findings["phone_cta"] = True
+
+        title_tag = soup.find("title")
+        description_tag = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+        return {
+            "url": url,
+            "page_type": self._page_type(url),
+            "title": title_tag.get_text(" ", strip=True)[:500] if title_tag else None,
+            "meta_description": (description_tag.get("content") or "")[:500] if description_tag else None,
+            "word_count": len(text.split()),
+            "responsive_signals": responsive_signals,
+            "forms_found": len(forms),
+        }
+
+    @staticmethod
+    def _page_type(url: str) -> str:
+        value = (url or "").lower()
+        if "contact" in value:
+            return "contact"
+        if any(term in value for term in ("book", "quote", "estimate", "schedule", "appointment")):
+            return "booking"
+        if "about" in value or "team" in value:
+            return "about"
+        if "service" in value or "pricing" in value:
+            return "services"
+        return "homepage"
+
+    def _extract_structured_data(self, url: str, soup: BeautifulSoup, findings: Dict[str, Any]) -> None:
+        """Collect public LocalBusiness/Person facts exposed through JSON-LD."""
+        nodes: List[Dict[str, Any]] = []
+        for script in soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)}):
+            raw = script.string or script.get_text()
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(payload, list):
+                nodes.extend(item for item in payload if isinstance(item, dict))
+            elif isinstance(payload, dict):
+                graph = payload.get("@graph")
+                if isinstance(graph, list):
+                    nodes.extend(item for item in graph if isinstance(item, dict))
+                else:
+                    nodes.append(payload)
+
+        for node in nodes:
+            node_type = node.get("@type") or ""
+            types = {str(item).lower() for item in (node_type if isinstance(node_type, list) else [node_type])}
+            email = (node.get("email") or "").strip().lower()
+            phone = (node.get("telephone") or "").strip()
+            if email:
+                findings["emails"].add(email)
+            if phone:
+                findings["phones"].add(phone)
+            for profile_url in node.get("sameAs") or []:
+                if not isinstance(profile_url, str):
+                    continue
+                lower_url = profile_url.lower()
+                for platform in ["linkedin", "facebook", "twitter", "instagram", "youtube"]:
+                    if f"{platform}.com" in lower_url:
+                        findings["social_profiles"].setdefault(platform, profile_url)
+            if {"person", "employee"}.intersection(types):
+                name = (node.get("name") or "").strip()
+                parts = name.split()
+                if len(parts) >= 2:
+                    findings["public_people"][name.lower()] = {
+                        "first_name": parts[0],
+                        "last_name": " ".join(parts[1:]),
+                        "title": node.get("jobTitle") or "Team member",
+                        "email": email or None,
+                        "phone": phone or None,
+                        "linkedin_url": next((value for value in node.get("sameAs") or [] if isinstance(value, str) and "linkedin.com" in value.lower()), None),
+                        "contact_type": "professional",
+                        "verification_status": "unknown",
+                        "confidence": 0.9,
+                        "source": "website_structured_data",
+                        "source_url": url,
+                    }
 
     def _extract_public_person(self, content: str, url: str) -> Optional[Dict[str, Any]]:
         """Extract a conservative name/title pair from short public page snippets."""
