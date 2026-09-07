@@ -29,7 +29,7 @@ export default function LeadDossier() {
   const handleRefreshResearch = async () => {
     setIsRefreshing(true);
     try {
-      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/crm/leads/${id}/enrich`, { method: "POST" });
       if (res.ok) {
         const refreshRes = await fetch(`${apiUrl}/api/crm/leads/${id}`);
@@ -47,7 +47,7 @@ export default function LeadDossier() {
   useEffect(() => {
     async function fetchLead() {
       try {
-        const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+        const apiUrl = "";
         const res = await fetch(`${apiUrl}/api/crm/leads/${id}`);
         if (res.ok) {
           setLead(await res.json());
@@ -83,7 +83,7 @@ export default function LeadDossier() {
     setIsGeneratingEmail(true);
     setEmailError(null);
     try {
-      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+      const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/leads/${id}/generate-email`, {
         method: "POST",
       });
