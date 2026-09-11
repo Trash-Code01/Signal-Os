@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Download, FileSpreadsheet, FileText, Code2, Check, Loader2, Database, Rocket } from "lucide-react";
-import { exportLeads, exportCampaigns } from "@/lib/exportUtils";
+import { exportLeads, exportCampaigns, exportCampaignsWithLeads } from "@/lib/exportUtils";
 
 export default function ExportsPage() {
   const [exporting, setExporting] = useState<string | null>(null);
@@ -43,7 +43,12 @@ export default function ExportsPage() {
       if (dataset === "leads") {
         exportLeads(leads, format, `devacia-leads-${leads.length}`);
       } else {
-        exportCampaigns(campaigns, format, `devacia-campaigns-${campaigns.length}`);
+        exportCampaignsWithLeads({
+          campaigns,
+          leads,
+          format,
+          filenamePrefix: `devacia-all-campaign-leads-${leads.length}`,
+        });
       }
       setSuccess(type);
       setTimeout(() => setSuccess(null), 2500);

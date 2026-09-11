@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { FiSearch, FiArchive, FiPlus, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import { ChevronRight } from 'lucide-react';
 import ExportDropdown, { ExportFormat, ExportScope } from '@/components/ExportDropdown';
-import { exportCampaigns } from '@/lib/exportUtils';
+import { exportCampaigns, exportCampaignsWithLeads } from '@/lib/exportUtils';
 
 export default function CampaignsPage() {
   const router = useRouter();
@@ -85,8 +85,35 @@ export default function CampaignsPage() {
       ? filteredCampaigns.filter(c => selectedIds.includes(c.id))
       : filteredCampaigns;
     if (!targetCampaigns.length) return;
-    const prefix = scope === "selected" ? `devacia-campaigns-selected-${targetCampaigns.length}` : `devacia-campaigns-all-${targetCampaigns.length}`;
-    exportCampaigns(targetCampaigns, format, prefix);
+
+    const targetCampaignIds = targetCampaigns.map(c => c.id);
+    let targetLeads: any[] = [];
+
+    try {
+      const apiUrl = "";
+      if (targetCampaigns.length === 1) {
+        const res = await fetch(`${apiUrl}/api/crm/leads?campaign_id=${targetCampaigns[0].id}&page_size=5000&status=all`);
+        if (res.ok) {
+          const data = await res.json();
+          targetLeads = data.leads || [];
+        }
+      } else {
+        const res = await fetch(`${apiUrl}/api/crm/leads?page_size=5000&status=all`);
+        if (res.ok) {
+          const data = await res.json();
+          const allLeads = data.leads || [];
+          targetLeads = allLeads.filter((l: any) => targetCampaignIds.includes(l.campaign_id));
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch leads for campaign export:", e);
+    }
+
+    exportCampaignsWithLeads({
+      campaigns: targetCampaigns,
+      leads: targetLeads,
+      format,
+    });
   };
 
   return (

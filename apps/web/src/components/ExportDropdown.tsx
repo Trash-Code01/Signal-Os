@@ -98,9 +98,15 @@ export default function ExportDropdown({
         )}
         <span>
           {variant === "floating"
-            ? `Export (${selectedCount})`
+            ? entityName === "Campaigns"
+              ? `Export Leads (${selectedCount})`
+              : `Export (${selectedCount})`
             : selectedCount > 0
-            ? `Export (${selectedCount})`
+            ? entityName === "Campaigns"
+              ? `Export Leads (${selectedCount})`
+              : `Export (${selectedCount})`
+            : entityName === "Campaigns"
+            ? "Export Leads"
             : "Export"}
         </span>
         <ChevronDown className="w-3 h-3 text-zinc-400" />
@@ -171,7 +177,9 @@ export default function ExportDropdown({
                   <span className="text-[10px] text-emerald-400 font-mono font-normal">.xlsx</span>
                 </div>
                 <div className="text-[10px] text-zinc-500 truncate">
-                  Formatted sheets & auto column widths
+                  {entityName === "Campaigns"
+                    ? "Campaign Leads + Summary sheets"
+                    : "Formatted sheets & auto column widths"}
                 </div>
               </div>
               {exportSuccess === "XLSX" && (
@@ -194,7 +202,9 @@ export default function ExportDropdown({
                   <span className="text-[10px] text-blue-400 font-mono font-normal">.csv</span>
                 </div>
                 <div className="text-[10px] text-zinc-500 truncate">
-                  UTF-8 BOM for Excel & Google Sheets
+                  {entityName === "Campaigns"
+                    ? "All leads, contacts, emails & phones"
+                    : "UTF-8 BOM for Excel & Google Sheets"}
                 </div>
               </div>
               {exportSuccess === "CSV" && (
@@ -217,7 +227,9 @@ export default function ExportDropdown({
                   <span className="text-[10px] text-purple-400 font-mono font-normal">.json</span>
                 </div>
                 <div className="text-[10px] text-zinc-500 truncate">
-                  Complete structured records
+                  {entityName === "Campaigns"
+                    ? "Full campaign & leads dossier records"
+                    : "Complete structured records"}
                 </div>
               </div>
               {exportSuccess === "JSON" && (
@@ -228,7 +240,9 @@ export default function ExportDropdown({
 
           {/* Footer note */}
           <div className="mt-2 pt-2 border-t border-zinc-800/60 px-2 py-1 text-[10px] text-zinc-500 text-center">
-            Ready to export {countToExport} {entityName.toLowerCase()}
+            {entityName === "Campaigns"
+              ? `Exports leads from ${countToExport} ${scope === "selected" ? "selected campaign" : "campaign"}${countToExport > 1 ? "s" : ""}`
+              : `Ready to export ${countToExport} ${entityName.toLowerCase()}`}
           </div>
         </div>
       )}

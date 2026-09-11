@@ -224,3 +224,85 @@ export function exportCampaigns(
     return;
   }
 }
+
+/**
+ * Export Campaigns WITH their leads to Excel (.xlsx), CSV (.csv), or JSON (.json)
+ */
+export function exportCampaignsWithLeads({
+  campaigns,
+  leads,
+  format,
+  filenamePrefix,
+}: {
+  campaigns: CampaignExportData[];
+  leads: LeadExportData[];
+  format: 'xlsx' | 'csv' | 'json';
+  filenamePrefix?: string;
+}) {
+  const timestamp = new Date().toISOString().split('T')[0];
+
+  let defaultPrefix = 'devacia-campaign-leads';
+  if (campaigns.length === 1 && campaigns[0]?.name) {
+    const safeName = campaigns[0].name
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+    defaultPrefix = `${safeName}_leads`;
+  }
+  const filename = `${filenamePrefix || defaultPrefix}-${timestamp}`;
+
+  if (format === 'json') {
+    const payload = {
+      exported_at: new Date().toISOString(),
+      total_campaigns: campaigns.length,
+      total_leads: leads.length,
+      campaigns,
+      leads,
+    };
+    const jsonBlob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8;',
+    });
+    downloadFile(jsonBlob, `${filename}.json`);
+    return;
+  }
+
+  const leadRows = formatLeadsForExport(leads);
+  const campaignRows = formatCampaignsForExport(campaigns);
+
+  if (format === 'csv') {
+    // Export all leads from the campaign(s) in CSV format.
+    // Fall back to campaign metadata only if no leads exist yet.
+    const rowsToExport = leadRows.length > 0 ? leadRows : campaignRows;
+    const ws = XLSX.utils.json_to_sheet(rowsToExport);
+    const csvContent = XLSX.utils.sheet_to_csv(ws);
+    const blob = new Blob(['\uFEFF' + csvContent], {
+      type: 'text/csv;charset=utf-8;',
+    });
+    downloadFile(blob, `${filename}.csv`);
+    return;
+  }
+
+  if (format === 'xlsx') {
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Campaign Leads
+    if (leadRows.length > 0) {
+      const wsLeads = XLSX.utils.json_to_sheet(leadRows);
+      wsLeads['!cols'] = calculateColWidths(leadRows);
+      XLSX.utils.book_append_sheet(wb, wsLeads, 'Campaign Leads');
+    } else {
+      const wsEmpty = XLSX.utils.json_to_sheet([{ Note: 'No leads found for this campaign yet' }]);
+      XLSX.utils.book_append_sheet(wb, wsEmpty, 'Campaign Leads');
+    }
+
+    // Sheet 2: Campaign Summary
+    if (campaignRows.length > 0) {
+      const wsCampaigns = XLSX.utils.json_to_sheet(campaignRows);
+      wsCampaigns['!cols'] = calculateColWidths(campaignRows);
+      XLSX.utils.book_append_sheet(wb, wsCampaigns, 'Campaign Summary');
+    }
+
+    XLSX.writeFile(wb, `${filename}.xlsx`);
+    return;
+  }
+}
