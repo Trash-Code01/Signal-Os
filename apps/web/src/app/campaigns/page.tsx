@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { FiSearch, FiArchive, FiPlus, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import { ChevronRight } from 'lucide-react';
+import ExportDropdown, { ExportFormat, ExportScope } from '@/components/ExportDropdown';
+import { exportCampaigns } from '@/lib/exportUtils';
 
 export default function CampaignsPage() {
   const router = useRouter();
@@ -78,6 +80,15 @@ export default function CampaignsPage() {
     }
   };
 
+  const handleExportCampaigns = async (format: ExportFormat, scope: ExportScope) => {
+    const targetCampaigns = scope === "selected" && selectedIds.length > 0
+      ? filteredCampaigns.filter(c => selectedIds.includes(c.id))
+      : filteredCampaigns;
+    if (!targetCampaigns.length) return;
+    const prefix = scope === "selected" ? `devacia-campaigns-selected-${targetCampaigns.length}` : `devacia-campaigns-all-${targetCampaigns.length}`;
+    exportCampaigns(targetCampaigns, format, prefix);
+  };
+
   return (
     <div className="p-4 md:p-10 max-w-[1400px] pb-32 md:pb-32 w-full mx-auto">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 md:mb-10 gap-4">
@@ -85,12 +96,21 @@ export default function CampaignsPage() {
           <h1 className="text-2xl md:text-3xl font-bold text-white mb-1 md:mb-2 tracking-tight">Campaigns</h1>
           <p className="text-sm md:text-base text-zinc-400">Manage your active and past intelligence pipelines.</p>
         </div>
-        <button 
-          onClick={() => router.push('/campaigns/new')} 
-          className="hidden md:flex items-center gap-2 bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-4 py-2 rounded-md text-sm font-medium transition whitespace-nowrap"
-        >
-          <FiPlus /> New campaign
-        </button>
+        <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+          <ExportDropdown
+            totalCount={filteredCampaigns.length}
+            selectedCount={selectedIds.length}
+            onExport={handleExportCampaigns}
+            entityName="Campaigns"
+            variant="header"
+          />
+          <button 
+            onClick={() => router.push('/campaigns/new')} 
+            className="flex items-center gap-2 bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-4 py-2 rounded-md text-sm font-medium transition whitespace-nowrap"
+          >
+            <FiPlus /> New campaign
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-4 border-b border-zinc-800 mb-6">
@@ -230,29 +250,37 @@ export default function CampaignsPage() {
       {/* Floating Action Bar */}
       {selectedIds.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-5">
-          <div className="bg-[#18181b] border border-zinc-700 shadow-2xl rounded-full px-6 py-3 flex items-center gap-6 text-sm">
-            <span className="text-white font-medium">
-              <span className="text-purple-400">{selectedIds.length}</span> selected
+          <div className="bg-[#18181b] border border-zinc-700 shadow-2xl rounded-full px-5 py-2.5 flex items-center gap-4 text-sm">
+            <span className="text-white font-medium text-xs">
+              <span className="text-purple-400 font-bold">{selectedIds.length}</span> selected
             </span>
-            <div className="w-px h-6 bg-zinc-700"></div>
+            <div className="w-px h-5 bg-zinc-700"></div>
+            <ExportDropdown
+              totalCount={filteredCampaigns.length}
+              selectedCount={selectedIds.length}
+              onExport={handleExportCampaigns}
+              entityName="Campaigns"
+              variant="floating"
+            />
+            <div className="w-px h-5 bg-zinc-700"></div>
             {statusTab === 'active' ? (
               <button 
                 onClick={() => handleBulkAction('delete')}
-                className="flex items-center gap-2 text-red-400 hover:text-red-300 font-medium transition"
+                className="flex items-center gap-1.5 text-red-400 hover:text-red-300 font-medium transition text-xs"
               >
                 <FiTrash2 /> Move to Trash
               </button>
             ) : (
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
                 <button 
                   onClick={() => handleBulkAction('recover')}
-                  className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 font-medium transition"
+                  className="flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 font-medium transition text-xs"
                 >
                   <FiRotateCcw /> Recover
                 </button>
                 <button 
                   onClick={() => handleBulkAction('permanent')}
-                  className="flex items-center gap-2 text-red-500 hover:text-red-400 font-medium transition"
+                  className="flex items-center gap-1.5 text-red-500 hover:text-red-400 font-medium transition text-xs"
                 >
                   <FiAlertTriangle /> Delete Permanently
                 </button>
@@ -260,7 +288,7 @@ export default function CampaignsPage() {
             )}
             <button 
               onClick={() => setSelectedIds([])}
-              className="ml-4 text-zinc-500 hover:text-zinc-300 transition"
+              className="text-zinc-500 hover:text-zinc-300 transition text-xs"
             >
               Cancel
             </button>

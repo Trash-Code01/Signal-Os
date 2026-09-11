@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw , PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import ExportDropdown, { ExportFormat, ExportScope } from "@/components/ExportDropdown";
+import { exportLeads } from "@/lib/exportUtils";
 
 type Filters = {
   q: string;
@@ -171,6 +173,44 @@ function LeadsPipelineContent() {
   const resetFilters = () => setFilters({ ...EMPTY_FILTERS, q: filters.q });
   const activeFilterCount = Object.entries(filters).filter(([k, v]) => k !== "q" && v && v !== "all").length;
 
+  const handleExportLeads = async (format: ExportFormat, scope: ExportScope) => {
+    let targetLeads: any[] = [];
+    if (scope === "selected" && selectedIds.length > 0) {
+      targetLeads = leads.filter((l) => selectedIds.includes(l.id));
+    } else {
+      if (leads.length >= total && leads.length > 0) {
+        targetLeads = leads;
+      } else {
+        try {
+          const apiUrl = "";
+          const params = new URLSearchParams();
+          if (filters.q.trim()) params.set("q", filters.q.trim());
+          if (filters.stage !== "all") params.set("stage", filters.stage);
+          if (filters.grade !== "all") params.set("grade", filters.grade);
+          if (filters.campaignId) params.set("campaign_id", filters.campaignId);
+          if (filters.industry && filters.industry !== "all") params.set("industry", filters.industry);
+          if (filters.country && filters.country !== "all") params.set("country", filters.country);
+          if (filters.contact) params.set("has_contact", filters.contact);
+          if (filters.minScore) params.set("min_score", filters.minScore);
+          params.set("page_size", "5000");
+          params.set("status", statusTab);
+          const res = await fetch(`${apiUrl}/api/crm/leads?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            targetLeads = data.leads || leads;
+          } else {
+            targetLeads = leads;
+          }
+        } catch (e) {
+          targetLeads = leads;
+        }
+      }
+    }
+    if (!targetLeads.length) return;
+    const prefix = scope === "selected" ? `devacia-leads-selected-${targetLeads.length}` : `devacia-leads-all-${targetLeads.length}`;
+    exportLeads(targetLeads, format, prefix);
+  };
+
   const stageColor: Record<string, string> = {
     qualified: "bg-emerald-900/40 text-emerald-400 border border-emerald-800/40",
     needs_review: "bg-orange-900/40 text-orange-400 border border-orange-800/40",
@@ -218,7 +258,16 @@ function LeadsPipelineContent() {
                 {activeFilterCount} active filter{activeFilterCount > 1 ? "s" : ""}
               </span>
             )}
-            <span className="ml-auto text-xs text-zinc-500 whitespace-nowrap">{total} results</span>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-xs text-zinc-500 whitespace-nowrap">{total} results</span>
+              <ExportDropdown
+                totalCount={total || leads.length}
+                selectedCount={selectedIds.length}
+                onExport={handleExportLeads}
+                entityName="Leads"
+                variant="header"
+              />
+            </div>
           </div>
 
           {/* Table */}
@@ -324,6 +373,13 @@ function LeadsPipelineContent() {
               <input type="text" placeholder="Search companies..." value={filters.q} onChange={(e) => updateFilters({ q: e.target.value })}
                 className="w-full bg-[#121214] border-none text-sm text-white rounded-xl pl-11 pr-4 py-3 outline-none placeholder:text-zinc-500 focus:ring-1 focus:ring-purple-500 transition-all" />
             </div>
+            <ExportDropdown
+              totalCount={total || leads.length}
+              selectedCount={selectedIds.length}
+              onExport={handleExportLeads}
+              entityName="Leads"
+              variant="header"
+            />
             <button onClick={() => setShowFilters(true)}
               className={`relative p-3 rounded-xl transition-colors ${activeFilterCount > 0 ? "bg-purple-500 text-white" : "bg-[#121214] text-zinc-400 hover:text-white"}`}>
               <SlidersHorizontal className="w-5 h-5" />
@@ -410,18 +466,26 @@ function LeadsPipelineContent() {
       {/* Floating Action Bar */}
       {selectedIds.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-5">
-          <div className="bg-[#18181b] border border-zinc-700 shadow-2xl rounded-full px-6 py-3 flex items-center gap-6 text-sm">
-            <span className="text-white font-medium">
-              <span className="text-purple-400">{selectedIds.length}</span> selected
+          <div className="bg-[#18181b] border border-zinc-700 shadow-2xl rounded-full px-5 py-2.5 flex items-center gap-4 text-sm">
+            <span className="text-white font-medium text-xs">
+              <span className="text-purple-400 font-bold">{selectedIds.length}</span> selected
             </span>
-            <div className="w-px h-6 bg-zinc-700"></div>
+            <div className="w-px h-5 bg-zinc-700"></div>
+            <ExportDropdown
+              totalCount={total || leads.length}
+              selectedCount={selectedIds.length}
+              onExport={handleExportLeads}
+              entityName="Leads"
+              variant="floating"
+            />
+            <div className="w-px h-5 bg-zinc-700"></div>
             <button 
               onClick={() => handleBulkAction('delete')}
-              className="flex items-center gap-2 text-red-400 hover:text-red-300 font-medium transition"
+              className="flex items-center gap-1.5 text-red-400 hover:text-red-300 font-medium transition text-xs"
             >
               Move to Trash
             </button>
-            <button onClick={() => setSelectedIds([])} className="ml-4 text-zinc-500 hover:text-zinc-300 transition">Cancel</button>
+            <button onClick={() => setSelectedIds([])} className="text-zinc-500 hover:text-zinc-300 transition text-xs">Cancel</button>
           </div>
         </div>
       )}
