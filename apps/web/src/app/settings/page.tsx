@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { ExternalLink, KeyRound, Lock, Mail, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ExternalLink, KeyRound, Lock, Mail, ShieldCheck, TriangleAlert, Server, Terminal, Database } from 'lucide-react';
 
 type ProviderStatus = {
   id: string;
@@ -26,9 +26,24 @@ export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [renderEnvironmentUrl, setRenderEnvironmentUrl] = useState('https://dashboard.render.com/');
   const [providerError, setProviderError] = useState('');
+  const [envInfo, setEnvInfo] = useState<{ environment?: string; discovery_mode?: string; database_host?: string } | null>(null);
+
+  const appEnv = process.env.NEXT_PUBLIC_APP_ENV || (process.env.NEXT_PUBLIC_API_URL?.includes('localhost') || process.env.NEXT_PUBLIC_API_URL?.includes('127.0.0.1') ? 'staging' : 'production');
+  const isStaging = appEnv === 'staging';
+  const backendUrl = process.env.NEXT_PUBLIC_API_URL || (isStaging ? 'http://localhost:8000' : 'https://devacia-backend.onrender.com');
 
   useEffect(() => {
     const base = process.env.NEXT_PUBLIC_API_URL || '';
+    fetch(`${base}/api/environment`)
+      .then(async (res) => {
+        if (res.ok) return res.json();
+        return null;
+      })
+      .then((data) => {
+        if (data) setEnvInfo(data);
+      })
+      .catch(() => {});
+
     fetch(`${base}/api/providers/status`)
       .then(async (response) => {
         if (!response.ok) throw new Error('Unable to load provider health.');
@@ -94,6 +109,75 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-8">
+        {/* Environment & Runtime Mode Card */}
+        <div className={`border rounded-xl p-6 transition-all ${
+          isStaging 
+            ? 'bg-amber-950/20 border-amber-500/30' 
+            : 'bg-[#121214] border-zinc-800/60'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <Server className={`w-5 h-5 ${isStaging ? 'text-amber-400' : 'text-emerald-400'}`} />
+                <h2 className="text-lg font-semibold text-white">System Environment</h2>
+                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
+                  isStaging 
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' 
+                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                }`}>
+                  {isStaging ? 'Staging / Local Sandbox' : 'Production Mode'}
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-zinc-400 max-w-2xl">
+                {isStaging 
+                  ? 'You are running in Staging mode. Campaigns, enrichment, and leads will not touch live production data or consume production API credits.' 
+                  : 'You are connected to the live Render production backend. Changes will affect live production data and credentials.'}
+              </p>
+            </div>
+            <div className="shrink-0 flex items-center gap-2">
+              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono font-medium ${
+                isStaging 
+                  ? 'bg-amber-500/10 text-amber-300 border border-amber-500/30' 
+                  : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${isStaging ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+                {isStaging ? 'Port 3001 (Staging)' : 'Port 3001 (Prod)'}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-black/30 border border-white/5 rounded-lg p-3">
+              <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Backend Target</div>
+              <div className="text-sm font-mono text-white mt-1 truncate">{backendUrl}</div>
+            </div>
+            <div className="bg-black/30 border border-white/5 rounded-lg p-3">
+              <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Discovery Engine</div>
+              <div className="text-sm font-mono text-white mt-1 capitalize">
+                {envInfo?.discovery_mode ? `${envInfo.discovery_mode} mode` : (isStaging ? 'mock (zero credit cost)' : 'live')}
+              </div>
+            </div>
+            <div className="bg-black/30 border border-white/5 rounded-lg p-3">
+              <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Database Target</div>
+              <div className="text-sm font-mono text-white mt-1">
+                {envInfo?.database_host === 'localhost' || isStaging ? 'Local PostgreSQL' : 'Render PostgreSQL'}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-white/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-zinc-400">
+            <div className="flex items-center gap-2">
+              <Terminal className="w-3.5 h-3.5 text-zinc-500" />
+              <span>Switch mode anytime:</span>
+            </div>
+            <div className="flex items-center gap-2 font-mono text-[11px]">
+              <code className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-amber-300">npm run dev:staging</code>
+              <span>or</span>
+              <code className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-emerald-300">npm run dev:prod</code>
+            </div>
+          </div>
+        </div>
+
         <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>

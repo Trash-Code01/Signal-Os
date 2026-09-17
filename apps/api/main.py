@@ -78,6 +78,79 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/environment")
+def get_environment():
+    """Returns the current backend runtime environment and configuration."""
+    db_url = os.environ.get("DATABASE_URL", "")
+    is_local_db = "localhost" in db_url or "127.0.0.1" in db_url
+    env_name = os.environ.get("ENVIRONMENT", "staging" if is_local_db else "production")
+    discovery_mode = os.environ.get("DISCOVERY_MODE", "mock" if env_name == "staging" else "live")
+    return {
+        "environment": env_name,
+        "discovery_mode": discovery_mode,
+        "database_host": "localhost" if is_local_db else "remote",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/providers/status")
+def get_providers_status(db: Session = Depends(get_db)):
+    """Returns health and configuration state for enrichment & discovery providers."""
+    providers_def = [
+        {"id": "serper", "name": "Serper (Google Search)", "keys": ["SERPER_API_KEY"]},
+        {"id": "groq", "name": "Groq LLM (Personalization SDR)", "keys": ["GROQ_API_KEY"]},
+        {"id": "snovio", "name": "Snov.io (Contact Finder)", "keys": ["SNOVIO_CLIENT_ID", "SNOVIO_CLIENT_SECRET"]},
+        {"id": "proxycurl", "name": "Proxycurl (LinkedIn / Contacts)", "keys": ["PROXYCURL_API_KEY"]},
+        {"id": "hunter", "name": "Hunter.io (Domain Search)", "keys": ["HUNTER_API_KEY"]},
+    ]
+
+    db_states = {}
+    try:
+        from core.models import ProviderHealth
+        records = db.query(ProviderHealth).all()
+        for r in records:
+            db_states[r.provider_name.lower()] = {
+                "state": r.state,
+                "message": r.message,
+                "last_http_status": r.last_http_status
+            }
+    except Exception:
+        pass
+
+    results = []
+    for p in providers_def:
+        pid = p["id"]
+        all_configured = all(bool(os.environ.get(k, "").strip()) for k in p["keys"])
+        recorded = db_states.get(pid)
+
+        if recorded:
+            state = recorded["state"]
+            msg = recorded["message"] or ("Configured and operational" if all_configured else "Missing API credentials")
+            http_status = recorded["last_http_status"]
+            action_req = state in ["error", "cooldown", "rate_limited"]
+        else:
+            state = "active" if all_configured else "unconfigured"
+            msg = "Configured and operational" if all_configured else "API key not set in environment"
+            http_status = 200 if all_configured else None
+            action_req = False
+
+        results.append({
+            "id": pid,
+            "name": p["name"],
+            "environment_keys": p["keys"],
+            "configured": all_configured,
+            "state": state,
+            "message": msg,
+            "last_http_status": http_status,
+            "action_required": action_req,
+        })
+
+    return {
+        "providers": results,
+        "render_environment_url": "https://dashboard.render.com/",
+    }
+
+
 @app.post("/api/setup-admin")
 def setup_admin(db: Session = Depends(get_db)):
     """Creates the admin user only if NO users exist. Safe bootstrap endpoint."""

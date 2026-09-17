@@ -33,6 +33,8 @@ import {
 export function Sidebar() {
   const pathname = usePathname() || '';
   const { state } = useSidebar();
+  const appEnv = process.env.NEXT_PUBLIC_APP_ENV || (process.env.NEXT_PUBLIC_API_URL?.includes('localhost') || process.env.NEXT_PUBLIC_API_URL?.includes('127.0.0.1') ? 'staging' : 'production');
+  const isStaging = appEnv === 'staging';
 
   const isActive = (path: string) => {
     return pathname === path || (path !== '/dashboard' && pathname.startsWith(path));
@@ -52,10 +54,23 @@ export function Sidebar() {
       <SidebarHeader className="p-5 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pt-5 group-data-[collapsible=icon]:items-center">
         <div className="flex items-center justify-between w-full group-data-[collapsible=icon]:justify-center">
           <div className="flex items-center gap-3 overflow-hidden group-data-[collapsible=icon]:hidden">
-            <div className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-white text-black font-bold text-lg">
+            <div className="relative flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-white text-black font-bold text-lg">
               D
+              {isStaging && (
+                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                </span>
+              )}
             </div>
-            <span className="font-semibold text-white tracking-tight">Devacia Admin</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-semibold text-white tracking-tight truncate">Devacia Admin</span>
+              {isStaging && (
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  Staging
+                </span>
+              )}
+            </div>
           </div>
           <SidebarTrigger className="h-6 w-6 shrink-0 text-zinc-500 hover:text-white hover:bg-white/10 rounded-md p-0 flex items-center justify-center transition-colors">
             {state === "collapsed" ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -160,10 +175,19 @@ export function Sidebar() {
         <button onClick={async () => {
           await fetch('/api/auth/logout', { method: 'POST' });
           window.location.href = '/login';
-        }} className="flex items-center gap-3 px-3 py-2 w-full group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:justify-center text-sm text-zinc-400 hover:text-white transition-colors mb-4">
+        }} className="flex items-center gap-3 px-3 py-2 w-full group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:justify-center text-sm text-zinc-400 hover:text-white transition-colors mb-3">
           <LogOut className="w-4 h-4 shrink-0" strokeWidth={2} />
           <span className="group-data-[collapsible=icon]:hidden">Log Out</span>
         </button>
+        {isStaging && (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs flex items-center justify-between group-data-[collapsible=icon]:hidden">
+            <span className="font-semibold flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+              Staging Mode
+            </span>
+            <span className="text-[10px] text-amber-400/90 font-mono bg-amber-500/20 px-1.5 py-0.5 rounded">Local</span>
+          </div>
+        )}
         <div className="flex items-center gap-3 p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:border-transparent group-data-[collapsible=icon]:p-0">
           <div className="w-8 h-8 flex-shrink-0 rounded-lg bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shadow-sm border border-white/10">
             L

@@ -22,6 +22,9 @@ function useBackendKeepalive() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '';
   const isAuth = pathname === '/login';
+  const appEnv = process.env.NEXT_PUBLIC_APP_ENV || (process.env.NEXT_PUBLIC_API_URL?.includes('localhost') || process.env.NEXT_PUBLIC_API_URL?.includes('127.0.0.1') ? 'staging' : 'production');
+  const isStaging = appEnv === 'staging';
+
   useBackendKeepalive(); // keeps Render backend warm — pings every 13 min
 
   if (isAuth) {
@@ -31,8 +34,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Sidebar />
-      <main className="flex-1 min-w-0 min-h-screen relative pb-24 md:pb-0">
-        {children}
+      <main className="flex-1 min-w-0 min-h-screen relative pb-24 md:pb-0 flex flex-col">
+        {isStaging && (
+          <div className="md:hidden bg-amber-500/10 border-b border-amber-500/20 px-3 py-1 text-center text-[10px] font-bold text-amber-300 tracking-wider uppercase flex items-center justify-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+            Staging Mode (Local)
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          {children}
+        </div>
         <MobileNav />
       </main>
     </>
