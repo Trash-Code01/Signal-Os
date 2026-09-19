@@ -196,6 +196,27 @@ def test_google_verification_invitation_and_revocation(setup, monkeypatch):
     assert client.post('/api/auth/logout',headers=h).status_code==200
     assert client.get('/api/auth/me',headers=h).status_code==401
 
+def test_dev_mock_google_login(setup, monkeypatch):
+    client, _ = setup
+    monkeypatch.setattr(auth, 'IS_STAGING', True)
+    nonce = 'm' * 32
+    res = client.post('/api/auth/google', json={'credential': 'dev-mock:devacia.com@gmail.com', 'nonce': nonce})
+    assert res.status_code == 200, res.text
+    assert 'access_token' in res.json()
+    h = {'Authorization': 'Bearer ' + res.json()['access_token']}
+    me = client.get('/api/auth/me', headers=h).json()
+    assert me['email'] == 'devacia.com@gmail.com'
+    assert me['role'] == 'admin'
+
+def test_staging_google_only_password_fallback(setup, monkeypatch):
+    client, _ = setup
+    monkeypatch.setattr(auth, 'IS_STAGING', True)
+    res = client.post('/api/auth/google', json={'credential': 'dev-mock:devuser@gmail.com', 'nonce': 'n'*32})
+    assert res.status_code == 200
+    login_res = client.post('/api/auth/login', json={'email': 'devuser@gmail.com', 'password': 'my-password'})
+    assert login_res.status_code == 200
+    assert 'access_token' in login_res.json()
+
 
 def test_cookie_csrf(setup):
     client,_=setup

@@ -72,6 +72,35 @@ export default function LoginPage() {
     }
   }, [ready, config]);
 
+  async function handleDevGoogleLogin(targetEmail = 'devacia.com@gmail.com') {
+    setLoading(true);
+    setError('');
+    try {
+      let currentNonce = config?.nonce;
+      if (!currentNonce) {
+        const res = await fetch('/api/auth/google', { cache: 'no-store' });
+        const data = await res.json();
+        if (data?.nonce) {
+          currentNonce = data.nonce;
+          setConfig(data);
+        }
+      }
+      if (!currentNonce) throw new Error('Could not establish session nonce. Please refresh.');
+
+      const response = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: `dev-mock:${targetEmail}`, nonce: currentNonce })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Sign-in failed');
+      window.location.replace('/dashboard');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed');
+      setLoading(false);
+    }
+  }
+
   async function handlePasswordLogin(e: React.FormEvent) {
     e.preventDefault();
     if (!email || !password) {
@@ -128,6 +157,22 @@ export default function LoginPage() {
         {/* Google Sign In Option */}
         <div className="space-y-3">
           <div ref={googleBtnRef} className={`flex justify-center min-h-[44px] ${loading ? 'pointer-events-none opacity-50' : ''}`} />
+
+          {/* 1-Click Dev Google Sign In */}
+          <button
+            type="button"
+            onClick={() => handleDevGoogleLogin('devacia.com@gmail.com')}
+            disabled={loading || pwLoading}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-violet-500/30 bg-violet-600/10 hover:bg-violet-600/20 text-violet-300 text-xs font-semibold transition hover:border-violet-500/50 shadow-sm"
+          >
+            <ShieldCheck className="w-4 h-4 text-violet-400 shrink-0" />
+            <span>1-Click Sign-In: <b>devacia.com@gmail.com</b></span>
+          </button>
+
+          <div className="text-center px-2 py-1.5 rounded bg-zinc-900/80 border border-zinc-800/60 text-[11px] text-zinc-400 leading-tight">
+            Encountering Google <span className="text-amber-400 font-mono">origin_mismatch</span> on localhost? Use the 1-Click button above or add localhost to Google Cloud Console.
+          </div>
+
           {!config?.client_id && (
             <div className="text-center p-2.5 rounded-lg border border-white/5 bg-white/[0.02] text-xs text-zinc-500">
               Google OAuth client pending configuration in Google Cloud
@@ -198,15 +243,25 @@ export default function LoginPage() {
         <div className="mt-5 pt-4 border-t border-zinc-800/60 flex items-center justify-between text-xs text-zinc-500">
           <span className="flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-            Default Admin:
+            Quick Fill:
           </span>
-          <button
-            type="button"
-            onClick={fillDemoAdmin}
-            className="text-violet-400 hover:text-violet-300 transition-colors underline font-mono text-[11px]"
-          >
-            admin@devacia.com
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setEmail('devacia.com@gmail.com'); setPassword('admin123'); setError(''); }}
+              className="text-violet-400 hover:text-violet-300 transition-colors underline font-mono text-[11px]"
+            >
+              devacia.com@gmail.com
+            </button>
+            <span className="text-zinc-700">|</span>
+            <button
+              type="button"
+              onClick={fillDemoAdmin}
+              className="text-violet-400 hover:text-violet-300 transition-colors underline font-mono text-[11px]"
+            >
+              admin@devacia.com
+            </button>
+          </div>
         </div>
 
         {process.env.NEXT_PUBLIC_APP_ENV === 'staging' && (
