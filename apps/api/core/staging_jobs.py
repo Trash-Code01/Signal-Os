@@ -27,35 +27,71 @@ def run_mock_campaign(db, campaign):
     personal_email_enabled = bool(settings.get("personal_email_enabled", False))
     phone_enabled = bool(settings.get("phone_enabled", False))
 
-    ind_name = campaign.industry.name if campaign.industry else "Roofing"
+    ind_name = (campaign.industry.name if campaign.industry else "Roofing").strip()
     city = location.city if location and location.city else "Dallas"
     state = location.region_state if location and location.region_state else "Texas"
     country = location.country if location and location.country else "USA"
 
-    sample_names = [
-        f"Apex {ind_name.title()} Solutions",
-        f"Summit Commercial {ind_name.title()}",
-        f"Vanguard {ind_name.title()} Group",
-        f"Lone Star {ind_name.title()} Pros",
-        f"Pinnacle {ind_name.title()} & Services",
-        f"Heritage {ind_name.title()} Co",
-        f"NextGen {ind_name.title()} Works",
-        f"Paramount {ind_name.title()} Experts",
-        f"TrueNorth {ind_name.title()} Specialists",
-        f"Metro {ind_name.title()} Contractors",
+    from core.deduplication import find_existing_business
+
+    prefixes = [
+        "Apex", "Summit", "Vanguard", "Lone Star", "Pinnacle", "Heritage",
+        "NextGen", "Paramount", "TrueNorth", "Metro", "Sterling", "BlueSky",
+        "Optima", "Prime", "Integrity", "Titan", "Zenith", "Horizon",
+        "Ascent", "Frontier", "Benchmark", "Endeavor", "Keystone", "Noble",
+        "Valor", "Beacon", "Crestview", "Radiant", "Elevate", "Velocity",
+        "Signature", "Ironclad", "Atlas", "Oasis", "Liberty", "Evergreen"
+    ]
+    modifiers = [
+        "", "Commercial ", "Premier ", "Elite ", "Pro ", "Advanced ",
+        "Precision ", "Master ", "Dynamic ", "Direct ", "Select "
+    ]
+    suffixes = [
+        "Solutions", "Group", "Pros", "Services", "Co", "Works",
+        "Experts", "Specialists", "Contractors", "Partners", "Enterprises"
     ]
 
-    first_names = ["David", "Michael", "Sarah", "James", "Elena", "Robert", "Jennifer", "Thomas", "Lisa", "William"]
-    last_names = ["Miller", "Sterling", "Davis", "Vance", "Harrison", "Carter", "Brooks", "Mitchell", "Morgan", "Price"]
+    first_names = ["David", "Michael", "Sarah", "James", "Elena", "Robert", "Jennifer", "Thomas", "Lisa", "William", "Marcus", "Emily", "Alexander", "Rachel", "Daniel"]
+    last_names = ["Miller", "Sterling", "Davis", "Vance", "Harrison", "Carter", "Brooks", "Mitchell", "Morgan", "Price", "Adams", "Foster", "Bennett", "Hayden", "Crawford"]
 
-    for number in range(1, count + 1):
-        biz_name = sample_names[(number - 1) % len(sample_names)]
-        if number > len(sample_names):
-            biz_name = f"{biz_name} #{number}"
+    # Offset candidate generation by existing business count in database to guarantee novel leads
+    base_offset = db.query(Business.id).count() + (campaign.id * 17)
+    created_count = 0
+    candidate_attempt = 0
 
+    while created_count < count and candidate_attempt < 2000:
+        candidate_attempt += 1
+        seq = base_offset + candidate_attempt
+
+        p_idx = seq % len(prefixes)
+        m_idx = (seq // len(prefixes)) % len(modifiers)
+        s_idx = (seq // (len(prefixes) * len(modifiers))) % len(suffixes)
+
+        prefix = prefixes[p_idx]
+        modifier = modifiers[m_idx]
+        suffix = suffixes[s_idx]
+
+        biz_name = f"{prefix} {modifier}{ind_name.title()} {suffix}".replace("  ", " ").strip()
         slug = re.sub(r"[^a-z0-9]+", "", biz_name.lower())
         crawl_email = f"contact@{slug}.com"
-        crawl_phone = f"+1 214-555-01{number:02d}"
+        # 4-digit unique phone suffix
+        phone_suffix = 1000 + (seq % 8999)
+        crawl_phone = f"+1 214-555-{phone_suffix:04d}"
+        website_url = f"https://{slug}.com"
+
+        # Check if this candidate already exists in the CRM or database
+        duplicate = find_existing_business(db, {
+            "google_place_id": None,
+            "website_url": website_url,
+            "primary_phone": crawl_phone,
+            "name": biz_name,
+            "city": city,
+        })
+        if duplicate:
+            continue
+
+        created_count += 1
+        number = created_count
 
         business = Business(
             campaign_id=campaign.id,
@@ -67,7 +103,7 @@ def run_mock_campaign(db, campaign):
             city=city,
             address=f"{100 + number * 14} Commercial Blvd, Suite {number}",
             primary_phone=crawl_phone,
-            website_url=f"https://{slug}.com",
+            website_url=website_url,
             website_domain=f"{slug}.com",
             status="qualified",
             rating=4.8,

@@ -979,31 +979,36 @@ def _split_contact_name(name: Optional[str]) -> tuple[Optional[str], Optional[st
     return (parts[0], parts[1] if len(parts) > 1 else None) if parts else (None, None)
 
 
-def _find_duplicate_business(db: Session, name: str, website_url: Optional[str], city: Optional[str]) -> Optional[Business]:
-    if website_url:
-        duplicate = db.query(Business).filter(func.lower(Business.website_url) == website_url.lower()).first()
-        if duplicate:
-            return duplicate
-    return db.query(Business).filter(Business.name == name, Business.city == city).first()
+def _find_duplicate_business(db: Session, name: str, website_url: Optional[str], city: Optional[str], primary_phone: Optional[str] = None) -> Optional[Business]:
+    from core.deduplication import find_existing_business
+    return find_existing_business(db, {
+        "name": name,
+        "website_url": website_url,
+        "city": city,
+        "primary_phone": primary_phone,
+    })
 
 
 def _create_crm_lead(payload: CRMLeadCreate, db: Session, source: str, activity_body: str) -> tuple[Business, bool]:
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Company name is required")
-    duplicate = _find_duplicate_business(db, name, payload.website_url, payload.city)
+    duplicate = _find_duplicate_business(db, name, payload.website_url, payload.city, payload.primary_phone)
     if duplicate:
         return duplicate, False
 
+    from core.deduplication import _normalise_domain
     stage = _normalise_stage(payload.stage)
     business = Business(
         name=name,
+        normalized_name=name.lower(),
         industry=payload.industry.strip() if payload.industry else None,
         country=payload.country.strip() if payload.country else None,
         state_province=payload.state_province.strip() if payload.state_province else None,
         city=payload.city.strip() if payload.city else None,
         primary_phone=payload.primary_phone.strip() if payload.primary_phone else None,
         website_url=payload.website_url.strip() if payload.website_url else None,
+        website_domain=_normalise_domain(payload.website_url) or None,
         status=stage,
     )
     db.add(business)

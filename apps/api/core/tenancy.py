@@ -16,6 +16,8 @@ def scope_statement(state):
 
 @event.listens_for(SessionLocal, "before_flush")
 def stamp_ownership(session, flush_context, instances):
+    if session.info.get("system_access"):
+        return
     owner_id = session.info.get("owner_id")
     for obj in session.new | session.dirty | session.deleted:
         if not isinstance(obj, OwnedRecord):

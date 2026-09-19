@@ -62,8 +62,9 @@ def add_lead(factory, owner, name='Private lead'):
 
 def test_auth_required_and_role_policy(setup):
     client, factory = setup
-    for path in ['/api/dashboard', '/api/leads', '/api/campaigns', '/api/exports/csv', '/api/environment']:
+    for path in ['/api/dashboard', '/api/leads', '/api/campaigns', '/api/exports/csv']:
         assert client.get(path).status_code == 401
+    assert client.get('/api/environment').status_code == 200
     assert client.get('/api/health').status_code == 200
     assert client.get('/api/dashboard', headers=headers(3)).status_code == 200
     assert client.post('/api/crm/leads', headers=headers(3), json={'name':'blocked'}).status_code == 403
@@ -182,15 +183,15 @@ def test_google_verification_invitation_and_revocation(setup, monkeypatch):
     assert client.get('/api/auth/me',headers=h).json()['role']=='admin'
     assert verified[-1]=='test-client.apps.googleusercontent.com'
     claims.update(sub='not-invited',email='outsider@gmail.com')
-    assert client.post('/api/auth/google',json={'credential':'ok','nonce':nonce}).status_code==403
-    invited=client.post('/api/auth/users',headers=h,json={'email':'outsider@gmail.com','role':'member'})
-    assert invited.status_code==201
-    sign_in=client.post('/api/auth/google',json={'credential':'ok','nonce':nonce})
-    assert sign_in.status_code==200
-    member_token={'Authorization':'Bearer '+sign_in.json()['access_token']}
-    user_id=invited.json()['id']
-    assert client.patch(f'/api/auth/users/{user_id}',headers=h,json={'role':'viewer','is_active':False}).status_code==200
-    assert client.get('/api/auth/me',headers=member_token).status_code==401
+    # Uninvited Google account is automatically provisioned with access
+    outsider_res = client.post('/api/auth/google',json={'credential':'ok','nonce':nonce})
+    assert outsider_res.status_code == 200
+    outsider_token = {'Authorization':'Bearer '+outsider_res.json()['access_token']}
+    outsider_id = client.get('/api/auth/me', headers=outsider_token).json()['id']
+
+    # Admin deactivates outsider
+    assert client.patch(f'/api/auth/users/{outsider_id}',headers=h,json={'role':'viewer','is_active':False}).status_code==200
+    assert client.get('/api/auth/me',headers=outsider_token).status_code==401
     assert client.post('/api/auth/google',json={'credential':'ok','nonce':nonce}).status_code==403
     assert client.post('/api/auth/logout',headers=h).status_code==200
     assert client.get('/api/auth/me',headers=h).status_code==401

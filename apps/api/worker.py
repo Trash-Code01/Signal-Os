@@ -107,26 +107,8 @@ def _set_business_status(db, business, status: str):
     db.flush()
 
 def _existing_business(db, data: Dict[str, Any]) -> Optional[Business]:
-    place_id = data.get("google_place_id")
-    if place_id:
-        match = db.query(Business).filter(Business.google_place_id == place_id).first()
-        if match:
-            return match
-    website = data.get("website_url")
-    if website:
-        domain = _domain(website)
-        if domain:
-            match = db.query(Business).filter(Business.website_domain == domain).first()
-            if match:
-                return match
-        match = db.query(Business).filter(Business.website_url == website).first()
-        if match:
-            return match
-    name = data.get("name")
-    city = data.get("city")
-    if name:
-        return db.query(Business).filter(Business.name == name, Business.city == city).first()
-    return None
+    from core.deduplication import find_existing_business
+    return find_existing_business(db, data)
 
 
 def _save_contact(db, business_id: int, data: Dict[str, Any]) -> bool:
@@ -452,8 +434,6 @@ def _qualify_no_website_business(db, business: Business) -> int:
         prompt_template="no_website_rule_with_public_contact_research",
         parsed_output={"confidence": "high", "primary_problem": "No official website found"},
     ))
-    _set_business_status(db, business, "qualified")
-
     campaign = db.get(Campaign, business.campaign_id) if business.campaign_id else None
     if campaign:
         db.refresh(campaign)
@@ -464,12 +444,18 @@ def _qualify_no_website_business(db, business: Business) -> int:
         contact["source"] = contact.get("source") or "google_search_fallback"
         saved_contacts += int(_save_contact(db, business.id, contact))
 
+    has_contact = (saved_contacts > 0) or bool(business.primary_phone) or _has_actionable_contact(db, business)
+    final_status = "qualified" if has_contact else "needs_contact_enrichment"
+    _set_business_status(db, business, final_status)
+
     db.add(CRMActivity(
         business_id=business.id,
-        activity_type="qualified",
+        activity_type=final_status,
         body=(
             "Qualified as a no-website opportunity. Public contact research found "
             f"{saved_contacts} new decision-maker record(s); the business phone remains available as a fallback."
+            if has_contact else
+            "No official website and no callable contact found. Routed to needs review."
         ),
         created_by="Lead Intelligence",
     ))
@@ -668,12 +654,14 @@ def process_campaign_task(campaign_id: int):
         )
         provider = get_discovery_provider()
         discovery_needed = max(0, target_quantity - len(resumable_businesses))
-        per_location_limit = max(1, math.ceil(discovery_needed / len(locations))) if discovery_needed else 0
+        # Oversample candidate pool so skipping duplicates and dead sites still delivers target_quantity
+        fetch_limit = min(100, max(discovery_needed * 3, 20)) if discovery_needed else 0
+        per_location_limit = max(1, math.ceil(fetch_limit / len(locations))) if fetch_limit else 0
         raw_businesses: List[Dict[str, Any]] = []
         for location in locations:
             if not discovery_needed:
                 break
-            remaining = target_quantity - len(raw_businesses)
+            remaining = fetch_limit - len(raw_businesses)
             if remaining <= 0:
                 break
             raw_businesses.extend(asyncio.run(provider.discover(
@@ -684,19 +672,21 @@ def process_campaign_task(campaign_id: int):
             )))
 
         dedupe = DeduplicationEngine()
-        unique_businesses = dedupe.deduplicate(raw_businesses)[:discovery_needed]
+        unique_businesses = dedupe.deduplicate(raw_businesses)
         saved_businesses: List[Business] = list(resumable_businesses)
         for raw in unique_businesses:
+            if len(saved_businesses) >= target_quantity:
+                break
             if not raw.get("name"):
                 continue
             existing = _existing_business(db, raw)
             if existing:
                 if existing.campaign_id == campaign_id:
+                    if existing not in saved_businesses:
+                        saved_businesses.append(existing)
                     continue
-                existing.campaign_id = campaign_id
-                existing.status = 'researching'
-                db.flush()
-                saved_businesses.append(existing)
+                # Never re-appropriate or repeat an already discovered lead in a new campaign
+                print(f"Skipping previously gathered lead '{raw.get('name')}' (already in Campaign {existing.campaign_id}) to prevent duplicates.")
                 continue
             business = Business(
                 campaign_id=campaign_id,
