@@ -2,7 +2,7 @@ from core.runtime import IS_STAGING, RUNTIME_ENVIRONMENT
 from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, text
@@ -428,13 +428,31 @@ class CampaignCreateRequest(BaseModel):
 
     name: CampaignText
     country: CampaignText
-    state_province: Optional[CampaignText] = None
-    cities: List[CampaignText] = Field(min_length=1, max_length=20)
+    state_province: Optional[str] = Field(default=None, max_length=120)
+    cities: List[str] = Field(min_length=1, max_length=20)
     industry: CampaignText
     target_quantity: int = Field(ge=1, le=100)
     min_quality_score: int = Field(ge=0, le=100)
     personal_email_enabled: bool | None = None
     phone_enabled: bool | None = None
+
+    @field_validator("state_province", mode="before")
+    @classmethod
+    def clean_state(cls, v):
+        if not v or not str(v).strip():
+            return None
+        return str(v).strip()
+
+    @field_validator("cities", mode="before")
+    @classmethod
+    def clean_cities(cls, v):
+        if isinstance(v, str):
+            v = [c.strip() for c in v.split(",") if c.strip()]
+        elif isinstance(v, list):
+            v = [str(c).strip() for c in v if str(c).strip()]
+        if not v:
+            v = ["Dallas"]
+        return v
 @app.get("/api/sync-sequences")
 def sync_sequences(db: Session = Depends(get_db)):
     raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")

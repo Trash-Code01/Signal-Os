@@ -27,14 +27,22 @@ export default function NewCampaignPage() {
   const { user } = useSession();
   const [error, setError] = useState('');
   const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
-  useEffect(() => { if (user) setOptions({ personal_email_enabled: user.personal_email_enabled, phone_enabled: user.phone_enabled }); }, [user]);
+  useEffect(() => {
+    if (user) {
+      setOptions({
+        personal_email_enabled: Boolean(user.personal_email_enabled),
+        phone_enabled: Boolean(user.phone_enabled),
+      });
+    }
+  }, [user]);
+
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
     name: '',
     country: 'USA',
-    state: '',
-    cities: '',
+    state: 'Texas',
+    cities: 'Dallas',
     industry: 'roofing',
     sub_industry: '',
     raw_target: 10,
@@ -49,28 +57,46 @@ export default function NewCampaignPage() {
   async function handleSubmit() {
     setLoading(true);
     setError('');
+
+    const parsedCities = form.cities
+      .split(',')
+      .map(c => c.trim())
+      .filter(Boolean);
+
+    const targetCities = parsedCities.length > 0 ? parsedCities : ['Dallas'];
+    const campaignName =
+      form.name.trim() ||
+      `${form.country} ${targetCities.join(', ')} ${selectedIndustry?.label || form.industry}`;
+
     try {
       const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/campaigns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: form.name || `${form.country} ${form.cities} ${selectedIndustry?.label}`,
-          country: form.country,
-          state_province: form.state,
-          cities: form.cities.split(',').map(c => c.trim()),
+          name: campaignName,
+          country: form.country || 'USA',
+          state_province: form.state.trim() || undefined,
+          cities: targetCities,
           industry: form.industry,
-          target_quantity: form.raw_target,
-          min_quality_score: form.min_score,
-          ...options,
+          target_quantity: Math.max(1, Math.min(100, Number(form.raw_target) || 10)),
+          min_quality_score: Math.max(0, Math.min(100, Number(form.min_score) || 60)),
+          personal_email_enabled: Boolean(options.personal_email_enabled),
+          phone_enabled: Boolean(options.phone_enabled),
         }),
       });
       if (res.ok) {
         const data = await res.json();
         router.push(`/jobs?campaign=${data.campaign_id}`);
       } else {
-        const data = await res.json();
-        setError(typeof data.detail === 'string' ? data.detail : 'Could not launch campaign.');
+        const data = await res.json().catch(() => ({}));
+        let errorMsg = 'Could not launch campaign.';
+        if (typeof data.detail === 'string') {
+          errorMsg = data.detail;
+        } else if (Array.isArray(data.detail)) {
+          errorMsg = data.detail.map((e: any) => `${e.loc?.slice(-1)[0] || 'field'}: ${e.msg}`).join(', ');
+        }
+        setError(errorMsg);
       }
     } catch {
       setError('Unable to launch campaign. Please retry.');
@@ -84,7 +110,7 @@ export default function NewCampaignPage() {
 
   return (
     <div className="p-4 md:p-10 max-w-4xl pb-24 md:pb-10 mx-auto">
-      {error && <p role="alert" className="mb-4 text-red-400">{error}</p>}
+      {error && <p role="alert" className="mb-4 text-red-400 bg-red-950/40 border border-red-800/50 p-3 rounded-xl text-sm">{error}</p>}
       {/* Header */}
       <div className="mb-8 md:mb-10">
         <div className="hidden md:flex items-center gap-2 text-zinc-500 text-sm mb-4">
@@ -311,7 +337,7 @@ export default function NewCampaignPage() {
               <h3 className="text-xs text-zinc-400 uppercase tracking-wider mb-3">Campaign Summary</h3>
               <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-sm bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50">
                 <span className="text-zinc-500">Location</span>
-                <span className="text-white text-right md:text-left truncate">{form.cities}, {form.state}</span>
+                <span className="text-white text-right md:text-left truncate">{form.cities || 'Dallas'}, {form.state || 'Texas'}</span>
                 <span className="text-zinc-500">Industry</span>
                 <span className="text-white text-right md:text-left truncate">{selectedIndustry?.label} {form.sub_industry ? `(${form.sub_industry})` : ''}</span>
                 <span className="text-zinc-500">Raw target</span>
