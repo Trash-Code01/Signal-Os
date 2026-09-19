@@ -6,9 +6,16 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 
+import { useSession } from '@/components/SessionProvider';
+import { ContactOptions, LookupOptions } from '@/components/ContactOptions';
+
 export default function LeadDossier() {
   const { id } = useParams();
   const router = useRouter();
+  const { user } = useSession();
+  const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
+  const [researchMessage, setResearchMessage] = useState('');
+  useEffect(() => { if (user) setOptions({ personal_email_enabled: user.personal_email_enabled, phone_enabled: user.phone_enabled }); }, [user]);
   const [lead, setLead] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -28,9 +35,13 @@ export default function LeadDossier() {
 
   const handleRefreshResearch = async () => {
     setIsRefreshing(true);
+    setResearchMessage('');
     try {
       const apiUrl = "";
-      const res = await fetch(`${apiUrl}/api/crm/leads/${id}/enrich`, { method: "POST" });
+      const res = await fetch(`${apiUrl}/api/crm/leads/${id}/enrich`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.detail || "Contact research failed");
+      setResearchMessage("Research queued with your selected options. Reload this lead after the job completes.");
       if (res.ok) {
         const refreshRes = await fetch(`${apiUrl}/api/crm/leads/${id}`);
         if (refreshRes.ok) {
@@ -38,7 +49,7 @@ export default function LeadDossier() {
         }
       }
     } catch (e) {
-      console.error("Failed to refresh research:", e);
+      setResearchMessage(e instanceof Error ? e.message : "Contact research failed");
     } finally {
       setIsRefreshing(false);
     }
@@ -314,6 +325,7 @@ export default function LeadDossier() {
           <div className="space-y-12">
             {/* Section: Contacts Workspace */}
             <section className="group space-y-6">
+              <div className="mb-5"><ContactOptions value={options} onChange={setOptions} disabled={isRefreshing || user?.role === 'viewer'} />{researchMessage && <p role="status" className="mt-2 text-xs text-zinc-400">{researchMessage}</p>}</div>
               {/* 1. Website & General Contacts Container */}
               <div>
                 <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
@@ -323,7 +335,7 @@ export default function LeadDossier() {
                       {crawlEmails.length} {crawlEmails.length === 1 ? "email" : "emails"} • {crawlPhones.length} {crawlPhones.length === 1 ? "phone" : "phones"}
                     </span>
                   </h2>
-                  <button onClick={handleRefreshResearch} disabled={isRefreshing} className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                  <button onClick={handleRefreshResearch} disabled={isRefreshing || user?.role === 'viewer'} className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50">
                     <span className={`material-symbols-outlined text-[14px] ${isRefreshing ? "animate-spin" : ""}`}>refresh</span>
                     {isRefreshing ? "Refreshing..." : "Refresh contacts"}
                   </button>
@@ -575,7 +587,7 @@ export default function LeadDossier() {
                   <div className="mt-6 pt-6 border-t border-outline-variant/20">
                     <button 
                       onClick={handleGenerateEmail} 
-                      disabled={isGeneratingEmail}
+                      disabled={isGeneratingEmail || user?.role === 'viewer'}
                       className="bg-primary text-[#141313] hover:bg-primary/90 px-4 py-2 rounded-lg text-xs font-semibold tracking-wider flex items-center gap-2 transition-colors disabled:opacity-50 uppercase shadow-sm active:scale-95"
                     >
                       <span className="material-symbols-outlined text-[16px]" style={{ fontVariationSettings: '"FILL" 1' }}>

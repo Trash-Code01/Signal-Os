@@ -1,4 +1,4 @@
-﻿services:
+services:
   # 1. FastAPI + Celery Backend (Docker)
   - type: web
     name: devacia-backend
@@ -21,6 +21,12 @@
         generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: GOOGLE_CLIENT_ID
+        value: 991104064928-r9v2tcb04lpgjo412np3tr1riep2gjeq.apps.googleusercontent.com
+      - key: GOOGLE_ADMIN_EMAIL
+        sync: false
       - key: DISCOVERY_MODE
         value: live
       - key: GROQ_API_KEY
@@ -41,7 +47,7 @@
       # Set this to the public Devacia frontend URL. Keeping it explicit avoids
       # credentialed CORS requests from arbitrary origins.
       - key: FRONTEND_ORIGIN
-        sync: false
+        value: https://devacia-frontend.onrender.com
 
   # 2. Next.js Frontend (Docker)
   - type: web

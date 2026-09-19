@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import { useSession } from '@/components/SessionProvider';
 import { useRouter } from 'next/navigation';
 import { FiSearch, FiArchive, FiPlus, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
 import { ChevronRight } from 'lucide-react';
@@ -9,6 +10,7 @@ import { exportCampaigns, exportCampaignsWithLeads } from '@/lib/exportUtils';
 
 export default function CampaignsPage() {
   const router = useRouter();
+  const { user } = useSession();
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -132,7 +134,7 @@ export default function CampaignsPage() {
             variant="header"
           />
           <button 
-            onClick={() => router.push('/campaigns/new')} 
+            disabled={user?.role === 'viewer'} onClick={() => router.push('/campaigns/new')}
             className="flex items-center gap-2 bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-4 py-2 rounded-md text-sm font-medium transition whitespace-nowrap"
           >
             <FiPlus /> New campaign
@@ -210,7 +212,7 @@ export default function CampaignsPage() {
                           </div>
                           <div>
                             <div className="font-medium text-white group-hover:text-[#a78bfa] transition">{c.name}</div>
-                            <div className="text-xs text-zinc-500">{new Date(c.created_at).toLocaleDateString()}</div>
+                            <div className="text-xs text-zinc-500">{new Date(c.created_at).toLocaleDateString()}</div><button onClick={event => { event.stopPropagation(); router.push(`/jobs?campaign=${c.id}`); }} className="mt-1 text-xs text-violet-400 hover:underline">Progress & contact options</button>
                           </div>
                         </div>
                       </td>
@@ -255,7 +257,7 @@ export default function CampaignsPage() {
                     />
                     <div className="flex-1 cursor-pointer" onClick={() => router.push(`/leads?campaignId=${c.id}`)}>
                       <div className="font-medium text-white line-clamp-1">{c.name}</div>
-                      <div className="text-xs text-zinc-500">{new Date(c.created_at).toLocaleDateString()}</div>
+                      <div className="text-xs text-zinc-500">{new Date(c.created_at).toLocaleDateString()}</div><button onClick={event => { event.stopPropagation(); router.push(`/jobs?campaign=${c.id}`); }} className="mt-1 text-xs text-violet-400 hover:underline">Progress & contact options</button>
                     </div>
                   </div>
                   <div className="pl-8 text-xs text-zinc-400">
@@ -292,7 +294,7 @@ export default function CampaignsPage() {
             <div className="w-px h-5 bg-zinc-700"></div>
             {statusTab === 'active' ? (
               <button 
-                onClick={() => handleBulkAction('delete')}
+                disabled={user?.role === 'viewer'} onClick={() => handleBulkAction('delete')}
                 className="flex items-center gap-1.5 text-red-400 hover:text-red-300 font-medium transition text-xs"
               >
                 <FiTrash2 /> Move to Trash
@@ -300,13 +302,13 @@ export default function CampaignsPage() {
             ) : (
               <div className="flex items-center gap-3">
                 <button 
-                  onClick={() => handleBulkAction('recover')}
+                  disabled={user?.role === 'viewer'} onClick={() => handleBulkAction('recover')}
                   className="flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 font-medium transition text-xs"
                 >
                   <FiRotateCcw /> Recover
                 </button>
                 <button 
-                  onClick={() => handleBulkAction('permanent')}
+                  disabled={user?.role !== 'admin'} onClick={() => handleBulkAction('permanent')}
                   className="flex items-center gap-1.5 text-red-500 hover:text-red-400 font-medium transition text-xs"
                 >
                   <FiAlertTriangle /> Delete Permanently

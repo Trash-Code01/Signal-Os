@@ -1,6 +1,7 @@
 "use client";
 
 import Link from 'next/link';
+import { useSession } from '@/components/SessionProvider';
 import { usePathname } from 'next/navigation';
 import { 
   PieChart, 
@@ -32,9 +33,11 @@ import {
 
 export function Sidebar() {
   const pathname = usePathname() || '';
+  const { user } = useSession();
   const { state } = useSidebar();
   const appEnv = process.env.NEXT_PUBLIC_APP_ENV || (process.env.NEXT_PUBLIC_API_URL?.includes('localhost') || process.env.NEXT_PUBLIC_API_URL?.includes('127.0.0.1') ? 'staging' : 'production');
   const isStaging = appEnv === 'staging';
+  const accountInitial = (user?.name?.trim() || user?.email || '?').charAt(0).toUpperCase();
 
   const isActive = (path: string) => {
     return pathname === path || (path !== '/dashboard' && pathname.startsWith(path));
@@ -64,7 +67,7 @@ export function Sidebar() {
               )}
             </div>
             <div className="flex items-center gap-2 min-w-0">
-              <span className="font-semibold text-white tracking-tight truncate">Devacia Admin</span>
+              <span className="font-semibold text-white tracking-tight truncate">Devacia OS</span>
               {isStaging && (
                 <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
                   Staging
@@ -128,12 +131,12 @@ export function Sidebar() {
                   <span className="group-data-[collapsible=icon]:hidden">All Campaigns</span>
                 </Link>
               </SidebarMenuItem>
-              <SidebarMenuItem>
+              {user?.role !== 'viewer' && <SidebarMenuItem>
                 <Link href="/campaigns/new" className={getLinkClass('/campaigns/new', true)}>
                   <PlusCircle className="w-4 h-4 shrink-0" strokeWidth={2} />
                   <span className="group-data-[collapsible=icon]:hidden">New Campaign</span>
                 </Link>
-              </SidebarMenuItem>
+              </SidebarMenuItem>}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -173,8 +176,9 @@ export function Sidebar() {
 
       <SidebarFooter className="p-5 mt-auto border-t border-white/5 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pb-5">
         <button onClick={async () => {
-          await fetch('/api/auth/logout', { method: 'POST' });
-          window.location.href = '/login';
+          const response = await fetch('/api/auth/logout', { method: 'POST' });
+          if (response.ok) window.location.href = '/login';
+          else window.alert('Unable to sign out. Please retry.');
         }} className="flex items-center gap-3 px-3 py-2 w-full group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:justify-center text-sm text-zinc-400 hover:text-white transition-colors mb-3">
           <LogOut className="w-4 h-4 shrink-0" strokeWidth={2} />
           <span className="group-data-[collapsible=icon]:hidden">Log Out</span>
@@ -190,11 +194,11 @@ export function Sidebar() {
         )}
         <div className="flex items-center gap-3 p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors cursor-pointer group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:border-transparent group-data-[collapsible=icon]:p-0">
           <div className="w-8 h-8 flex-shrink-0 rounded-lg bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shadow-sm border border-white/10">
-            L
+            {accountInitial}
           </div>
           <div className="flex flex-col overflow-hidden group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-medium text-white truncate leading-tight">laraib</span>
-            <span className="text-xs text-zinc-500 truncate mt-0.5">Administrator</span>
+            <span className="text-sm font-medium text-white truncate leading-tight">{user?.name || user?.email}</span>
+            <span className="text-xs text-zinc-500 truncate mt-0.5">{user?.role}</span>
           </div>
         </div>
       </SidebarFooter>

@@ -1,48 +1,19 @@
-﻿# ==============================================================================
-# Devacia OS - Staging Development Runner
-# Boots local staging stack completely isolated from live production data.
-# Frontend: http://localhost:3001
-# Backend:  http://localhost:8000
-# ==============================================================================
-
-Write-Host ""
-Write-Host "============================================================" -ForegroundColor Yellow
-Write-Host "    DEVACIA INTELLIGENCE OS - STAGING DEVELOPMENT MODE      " -ForegroundColor Yellow
-Write-Host "============================================================" -ForegroundColor Yellow
-Write-Host " [SAFE SANDBOX] No live production data or API credits used. " -ForegroundColor Cyan
-Write-Host ""
-
- = Split-Path -Parent System.Management.Automation.InvocationInfo.MyCommand.Path
- = Join-Path  "apps\api"
- = Join-Path  "apps\web"
-
-# 1. Check Docker status (optional helper)
-Write-Host "[1/3] Checking Docker / Database services..." -ForegroundColor Cyan
-try {
-     = docker ps 2>&1
-    if ( -eq 0) {
-        Write-Host " Docker daemon is active." -ForegroundColor Green
-    } else {
-        Write-Host " Docker daemon not detected. Using native/existing PostgreSQL service if running." -ForegroundColor DarkYellow
-    }
-} catch {
-    Write-Host " Docker check skipped." -ForegroundColor DarkGray
+$ErrorActionPreference = 'Stop'
+$projectRoot = $PSScriptRoot
+$apiRoot = Join-Path $projectRoot 'apps\api'
+$webRoot = Join-Path $projectRoot 'apps\web'
+$logRoot = Join-Path $projectRoot '.staging-logs'
+New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+foreach ($port in @(8000, 3001)) {
+    $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+    try { $probe.Start() }
+    catch { throw "Cannot bind port $port. Stop its existing service before starting staging." }
+    finally { $probe.Stop() }
 }
-
-# 2. Start Backend in Staging Mode (Port 8000)
-Write-Host "[2/3] Launching FastAPI Backend in Staging Mode (Port 8000)..." -ForegroundColor Cyan
- = Join-Path  "start-backend-staging.ps1"
-Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", """"
-
-# 3. Start Frontend in Staging Mode (Port 3001)
-Write-Host "[3/3] Launching Next.js Frontend on PORT 3001..." -ForegroundColor Cyan
-Write-Host ""
-Write-Host "============================================================" -ForegroundColor Green
-Write-Host " Staging App URL:  http://localhost:3001" -ForegroundColor Green
-Write-Host " Staging API URL:  http://localhost:8000" -ForegroundColor Green
-Write-Host " Admin Login:      admin@devacia.com / admin123" -ForegroundColor Green
-Write-Host "============================================================" -ForegroundColor Green
-Write-Host ""
-
-Set-Location 
-npm run dev:staging
+$backendScript = Join-Path $apiRoot 'start-backend-staging.ps1'
+$frontendScript = Join-Path $webRoot 'start-web-staging.ps1'
+$backend = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $backendScript + '"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot 'api.out.log') -RedirectStandardError (Join-Path $logRoot 'api.err.log')
+$frontend = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $frontendScript + '"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot 'web.out.log') -RedirectStandardError (Join-Path $logRoot 'web.err.log')
+@{backend=$backend.Id; frontend=$frontend.Id} | ConvertTo-Json | Set-Content (Join-Path $logRoot 'processes.json')
+Write-Host 'Staging starting at http://127.0.0.1:3001 with an isolated SQLite database and mock jobs.'
+Write-Host 'Google configuration: apps/api/.env.staging.local. Logs: .staging-logs.'

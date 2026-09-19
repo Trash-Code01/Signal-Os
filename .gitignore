@@ -6,4 +6,47 @@
 node_modules/
 .next/
 __pycache__/
+*.pyc
 .pytest_cache/
+
+apps/api/staging.db*
+apps/api/.staging-session-key
+.staging-logs/
+.next-auth-check/
+production.env
+apps/api/venv*/
+venv*/
+
+# Scratch scripts in root
+/*.py
+/*.js
+/*.html
+/*.txt
+task.md
+dm_section.txt
+current_leads.txt
+implementation_plan.md
+walkthrough.md
+
+# Scratch scripts in apps
+apps/api/clean_*.py
+apps/api/repatch*.py
+apps/api/insert_*.py
+apps/api/migrate_*.py
+apps/api/prod_db_check.py
+apps/api/local_db_check.py
+apps/api/reset_admin.py
+apps/api/create_admin.py
+apps/api/revalidate_history.py
+apps/api/append_endpoints.py
+apps/api/fix_*.py
+apps/api/test_output.json
+apps/web/*.py
+apps/web/*.js
+
+# Local provider diagnostics can contain live credentials or API responses.
+apps/api/test_*.py
+apps/api/check_*.py
+apps/api/list_*models.py
+apps/api/*_debug.*
+apps/api/website_debug.log

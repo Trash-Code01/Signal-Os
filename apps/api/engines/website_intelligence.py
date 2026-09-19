@@ -7,6 +7,8 @@ import aiohttp
 from bs4 import BeautifulSoup
 from typing import Dict, Any, List, Optional, Set, Tuple
 
+from core.safe_http import PublicAddressResolver, fetch_public_http_text
+
 class WebsiteIntelligenceEngine:
     """
     Crawls strategic pages using aiohttp & BeautifulSoup to eliminate Docker/Playwright dependencies.
@@ -25,10 +27,11 @@ class WebsiteIntelligenceEngine:
     async def audit_website(self, start_url: str) -> Dict[str, Any]:
         print(f"[Crawler] Starting fast native audit for {start_url}")
         
-        if not start_url.startswith("http"):
+        parsed_start = urllib.parse.urlsplit(start_url.strip())
+        if not parsed_start.scheme:
             start_url = f"https://{start_url}"
             
-        base_domain = urllib.parse.urlparse(start_url).netloc
+        base_domain = (urllib.parse.urlsplit(start_url).hostname or "").rstrip(".").lower()
             
         findings = {
             "is_live": False,
@@ -59,7 +62,13 @@ class WebsiteIntelligenceEngine:
 
         try:
             timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(headers=self.headers, timeout=timeout) as session:
+            connector = aiohttp.TCPConnector(resolver=PublicAddressResolver())
+            async with aiohttp.ClientSession(
+                headers=self.headers,
+                timeout=timeout,
+                connector=connector,
+                trust_env=False,
+            ) as session:
                 while queue and pages_crawled < self.max_pages:
                     queue.sort(key=lambda item: self._page_priority(item[0]))
                     current_url, depth = queue.pop(0)
@@ -77,36 +86,36 @@ class WebsiteIntelligenceEngine:
                     print(f"[Crawler] Fetching {pages_crawled}/{self.max_pages}: {current_url}")
                     
                     try:
-                        async with session.get(current_url, ssl=False, allow_redirects=True) as response:
-                            if response.status >= 400:
-                                continue
-                            
-                            html = await response.text()
-                            findings["is_live"] = True
-                            final_url = str(response.url)
-                            findings["pages_checked"].append(final_url)
-                            
-                            soup = BeautifulSoup(html, "html.parser")
-                            
-                            # Remove script/style tags for cleaner text
-                            for script in soup(["script", "style"]):
-                                script.decompose()
-                            
-                            text = soup.get_text(separator=" ", strip=True)
-                            
-                            page_detail = self._extract_from_html(final_url, html, text, soup, findings)
-                            page_detail["status_code"] = response.status
-                            findings["page_details"].append(page_detail)
-                            
-                            # Find internal links
-                            if depth < self.max_depth:
-                                for a_tag in soup.find_all("a", href=True):
-                                    href = a_tag["href"]
-                                    full_url = urllib.parse.urljoin(final_url, href)
-                                    if full_url.startswith('http'):
-                                        link_domain = urllib.parse.urlparse(full_url).netloc
-                                        if link_domain == base_domain:
-                                            queue.append((self._normalise_url(full_url), depth + 1))
+                        response = await fetch_public_http_text(session, current_url)
+                        if response.status >= 400:
+                            continue
+
+                        html = response.text
+                        findings["is_live"] = True
+                        final_url = response.url
+                        findings["pages_checked"].append(final_url)
+
+                        soup = BeautifulSoup(html, "html.parser")
+
+                        # Remove script/style tags for cleaner text
+                        for script in soup(["script", "style"]):
+                            script.decompose()
+
+                        text = soup.get_text(separator=" ", strip=True)
+
+                        page_detail = self._extract_from_html(final_url, html, text, soup, findings)
+                        page_detail["status_code"] = response.status
+                        findings["page_details"].append(page_detail)
+
+                        # Find internal links
+                        if depth < self.max_depth:
+                            for a_tag in soup.find_all("a", href=True):
+                                href = a_tag["href"]
+                                full_url = urllib.parse.urljoin(final_url, href)
+                                if full_url.startswith('http'):
+                                    link_domain = (urllib.parse.urlsplit(full_url).hostname or "").rstrip(".").lower()
+                                    if link_domain == base_domain:
+                                        queue.append((self._normalise_url(full_url), depth + 1))
                                             
                     except Exception as e:
                         print(f"[Crawler] Failed on {current_url}: {e}")

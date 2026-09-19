@@ -1,3 +1,4 @@
+from core.runtime import IS_STAGING
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -12,9 +13,9 @@ class SerperSearchProvider:
     base_url = "https://google.serper.dev/search"
 
     def __init__(self):
-        self.api_key = os.environ.get("SERPER_API_KEY", "").strip()
+        self.api_key = "" if IS_STAGING else os.environ.get("SERPER_API_KEY", "").strip()
 
-    async def search_decision_makers(self, business_name: str, city: Optional[str] = None, official_domain: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def search_decision_makers(self, business_name: str, city: Optional[str] = None, official_domain: Optional[str] = None, include_email: bool = False, include_phone: bool = False) -> List[Dict[str, Any]]:
         if not self.api_key or not business_name:
             if not self.api_key:
                 report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing.")
@@ -30,6 +31,9 @@ class SerperSearchProvider:
             f'site:linkedin.com/in "{business_name}" (owner OR founder OR CEO OR president)',
         ])
         
+        if include_email or include_phone:
+            fields = " ".join(field for enabled, field in [(include_email, "email"), (include_phone, "direct phone mobile")] if enabled)
+            queries = [f'"{business_name}" "{location}" (owner OR founder OR CEO) ({fields})']
         contacts: List[Dict[str, Any]] = []
         headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
         async with aiohttp.ClientSession(headers=headers) as session:
@@ -54,6 +58,16 @@ class SerperSearchProvider:
                         official_domain
                     )
                     if contact:
+                        # Only attach details explicitly present in the same source snippet.
+                        snippet = result.get("snippet") or ""
+                        if include_email:
+                            emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", snippet)
+                            contact["email"] = emails[0].lower() if emails else None
+                        if include_phone:
+                            phone = re.search(r"(?:direct(?:\s+phone)?|mobile|cell)\s*[:=]?\s*(\+?[\d(][\d\s().-]{7,}\d)", snippet, re.I)
+                            candidate = phone.group(1).strip() if phone else None
+                            digits = re.sub(r"\D", "", candidate or "")
+                            contact["phone"] = candidate if 8 <= len(digits) <= 15 else None
                         contacts.append(contact)
                         
         deduped = self._dedupe(contacts)
@@ -87,7 +101,7 @@ class SerperSearchProvider:
         if official_domain:
             try:
                 parsed_url = urlparse(url)
-                if official_domain.lower() in parsed_url.netloc.lower():
+                if parsed_url.hostname and (parsed_url.hostname.lower() == official_domain.lower() or parsed_url.hostname.lower().endswith("." + official_domain.lower())):
                     return True
             except Exception:
                 pass

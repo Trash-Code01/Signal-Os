@@ -1,8 +1,9 @@
+from core.runtime import IS_STAGING, RUNTIME_ENVIRONMENT
 from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import Annotated, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, text
 from worker import enrich_lead_contacts_task, process_campaign_task
@@ -10,14 +11,18 @@ from core.database import get_db, engine
 from core.models import *
 from datetime import datetime, timezone
 import csv
+import hashlib
+import hmac
 import io
 import json
 import os
 import re
 import traceback
 from auth import router as auth_router
+from core.access import authorize_request, get_current_user
+from core.auth_schema import migrate_auth_schema
 
-app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0")
+app = FastAPI(title="Devacia Lead Intelligence OS", version="1.0.0", dependencies=[Depends(authorize_request)])
 
 app.include_router(auth_router)
 
@@ -25,6 +30,12 @@ app.include_router(auth_router)
 @app.on_event("startup")
 def startup_db_migrations():
     """Ensure all required columns and tables exist on application startup."""
+    migrate_auth_schema(engine)
+    from core.tenancy import migrate_ownership
+    migrate_ownership(engine)
+    if engine.dialect.name == "sqlite":
+        Base.metadata.create_all(engine)
+        return
     try:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
@@ -57,11 +68,13 @@ async def global_exception_handler(request: Request, exc: Exception):
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc), "traceback": traceback.format_exc()}
+        content={"detail": "Unexpected server error"}
     )
 
 @app.get("/api/debug-discovery")
 def debug_discovery():
+    if IS_STAGING:
+        return {"mode": "mock", "message": "Live discovery disabled in staging"}
     import asyncio
     import os
     from providers.serper_discovery_provider import SerperDiscoveryProvider
@@ -82,11 +95,10 @@ def health_check():
 def get_environment():
     """Returns the current backend runtime environment and configuration."""
     db_url = os.environ.get("DATABASE_URL", "")
-    is_local_db = "localhost" in db_url or "127.0.0.1" in db_url
-    env_name = os.environ.get("ENVIRONMENT", "staging" if is_local_db else "production")
-    discovery_mode = os.environ.get("DISCOVERY_MODE", "mock" if env_name == "staging" else "live")
+    is_local_db = db_url.startswith("sqlite:") or "localhost" in db_url or "127.0.0.1" in db_url
+    discovery_mode = os.environ.get("DISCOVERY_MODE", "mock" if IS_STAGING else "live")
     return {
-        "environment": env_name,
+        "environment": RUNTIME_ENVIRONMENT,
         "discovery_mode": discovery_mode,
         "database_host": "localhost" if is_local_db else "remote",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -123,7 +135,9 @@ def get_providers_status(db: Session = Depends(get_db)):
         all_configured = all(bool(os.environ.get(k, "").strip()) for k in p["keys"])
         recorded = db_states.get(pid)
 
-        if recorded:
+        if IS_STAGING:
+            state, msg, http_status, action_req = "mock", "Disabled in staging; no paid provider requests.", None, False
+        elif recorded:
             state = recorded["state"]
             msg = recorded["message"] or ("Configured and operational" if all_configured else "Missing API credentials")
             http_status = recorded["last_http_status"]
@@ -153,84 +167,29 @@ def get_providers_status(db: Session = Depends(get_db)):
 
 @app.post("/api/setup-admin")
 def setup_admin(db: Session = Depends(get_db)):
-    """Creates the admin user only if NO users exist. Safe bootstrap endpoint."""
-    from core.models import User
-    from core.auth import get_password_hash
-    user_count = db.query(User).count()
-    if user_count > 0:
-        return {"status": "exists", "message": f"Database already has {user_count} user(s). No action taken."}
-    admin = User(email="admin@devacia.com", hashed_password=get_password_hash("admin123"))
-    db.add(admin)
-    db.commit()
-    return {"status": "ok", "message": "Admin user created: admin@devacia.com / admin123"}
+    raise HTTPException(410, "Use Google sign-in with the configured admin email.")
 
-MIGRATE_TABLES = {"campaigns", "businesses", "scores", "opportunities", "crm_leads"}
 
 @app.post("/api/migrate-clear")
 def migrate_clear(payload: dict, db: Session = Depends(get_db)):
-    """Truncates a table with CASCADE."""
-    from sqlalchemy import text as sa_text
-    table_name = payload.get("table_name")
-    if table_name not in MIGRATE_TABLES:
-        return {"status": "error", "message": f"Table {table_name} not allowed"}
-    try:
-        db.execute(sa_text(f"TRUNCATE TABLE {table_name} CASCADE"))
-        db.commit()
-        return {"status": "ok", "message": f"Truncated {table_name}"}
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "message": str(e)}
+    raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")
+
 
 @app.post("/api/migrate-disable-fk")
 def migrate_disable_fk(db: Session = Depends(get_db)):
-    """Drops ALL FK constraints on all migration tables so data can be inserted in any order."""
-    from sqlalchemy import text as sa_text
-    dropped = []
-    try:
-        # Find all FK constraints on our migration tables
-        result = db.execute(sa_text("""
-            SELECT tc.table_name, tc.constraint_name
-            FROM information_schema.table_constraints tc
-            WHERE tc.constraint_type = 'FOREIGN KEY'
-              AND tc.table_name IN ('campaigns','businesses','scores','opportunities','crm_leads')
-        """))
-        constraints = result.fetchall()
-        for table_name, constraint_name in constraints:
-            db.execute(sa_text(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"'))
-            dropped.append(f"{table_name}.{constraint_name}")
-        db.commit()
-        return {"status": "ok", "dropped": dropped}
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "message": str(e)}
+    raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")
+
 
 @app.post("/api/migrate-upload")
 def migrate_upload(payload: dict, db: Session = Depends(get_db)):
-    """Inserts a batch of records into a table. Call migrate-disable-fk first."""
-    try:
-        from core.models import Base
-        table_name = payload.get("table_name")
-        records = payload.get("records", [])
-        if not records:
-            return {"status": "ok", "inserted": 0}
-
-        model_class = next((c for c in Base.registry.mappers if c.class_.__tablename__ == table_name), None)
-        if not model_class:
-            return {"status": "error", "message": f"Table {table_name} not found"}
-
-        cls = model_class.class_
-        for record in records:
-            db.merge(cls(**record))
-        db.commit()
-        return {"status": "ok", "inserted": len(records)}
-    except Exception as e:
-        db.rollback()
-        return {"status": "error", "message": str(e)}
+    raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")
 
 
 @app.on_event("startup")
 def ensure_crm_workspace_schema() -> None:
     """Create only the new CRM tables for deployments with legacy Alembic history."""
+    if engine.dialect.name == "sqlite":
+        return
     CRMLead.__table__.create(bind=engine, checkfirst=True)
     CRMActivity.__table__.create(bind=engine, checkfirst=True)
     with engine.begin() as conn:
@@ -243,7 +202,7 @@ def ensure_crm_workspace_schema() -> None:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for local dev
+    allow_origins=[origin.strip() for origin in os.getenv("FRONTEND_ORIGIN", "http://localhost:3001").split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -273,17 +232,35 @@ def _apollo_webhook_people(payload: object) -> List[dict]:
 async def receive_apollo_webhook(
     request: Request,
     business_id: int = Query(..., gt=0),
-    token: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     """Persist asynchronous Apollo phone/waterfall enrichment for one business."""
+    if IS_STAGING or os.getenv("APOLLO_WEBHOOKS_ENABLED", "false").lower() != "true":
+        raise HTTPException(403, "Live webhooks are disabled")
     expected_token = os.environ.get("APOLLO_WEBHOOK_SECRET", "").strip()
-    if not expected_token or token != expected_token:
-        raise HTTPException(status_code=401, detail="Invalid Apollo webhook token")
-    if not db.query(Business.id).filter(Business.id == business_id).first():
+    timestamp = request.headers.get("x-apollo-timestamp", "")
+    signature = request.headers.get("x-apollo-signature", "").removeprefix("sha256=")
+    try:
+        timestamp_value = int(timestamp)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    if abs(int(datetime.now(timezone.utc).timestamp()) - timestamp_value) > 300:
+        raise HTTPException(status_code=401, detail="Expired webhook signature")
+    raw_body = await request.body()
+    if len(raw_body) > 1_000_000:
+        raise HTTPException(status_code=413, detail="Webhook payload is too large")
+    signed_payload = f"{timestamp}.{business_id}.".encode() + raw_body
+    expected_signature = hmac.new(expected_token.encode(), signed_payload, hashlib.sha256).hexdigest() if expected_token else ""
+    if not expected_signature or not hmac.compare_digest(signature, expected_signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    from core.tenancy import load_owned_job
+    if not load_owned_job(db, Business, business_id):
         raise HTTPException(status_code=404, detail="Business not found")
 
-    payload = await request.json()
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
     saved = 0
     for person in _apollo_webhook_people(payload):
         phones = person.get("phone_numbers") or []
@@ -408,6 +385,7 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
         "status": campaign.status,
         "terminal": is_terminal,
         "campaign_id": campaign.id,
+        "contact_options": {"personal_email_enabled": bool((campaign.settings or {}).get("personal_email_enabled", False)), "phone_enabled": bool((campaign.settings or {}).get("phone_enabled", False))},
         "name": campaign.name,
         "stats": {
             "discovered": discovered,
@@ -423,62 +401,52 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     }
 
 
+class CampaignContactOptions(BaseModel):
+    personal_email_enabled: bool | None = None
+    phone_enabled: bool | None = None
+
+
+@app.patch("/api/campaigns/{campaign_id}/contact-options")
+def update_campaign_contacts(campaign_id: int, options: CampaignContactOptions, db: Session = Depends(get_db)):
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id, Campaign.deleted_at.is_(None)).first()
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    settings = {**(campaign.settings or {})}
+    settings.update(options.model_dump(exclude_unset=True, exclude_none=True))
+    campaign.settings = settings
+    db.commit()
+    return {
+        "personal_email_enabled": bool(settings.get("personal_email_enabled", False)),
+        "phone_enabled": bool(settings.get("phone_enabled", False)),
+    }
+
+
+CampaignText = Annotated[str, Field(min_length=1, max_length=120)]
+
+
 class CampaignCreateRequest(BaseModel):
 
-    name: str
-    country: str
-    state_province: Optional[str] = None
-    cities: List[str]
-    industry: str
-    target_quantity: int
-    min_quality_score: int
+    name: CampaignText
+    country: CampaignText
+    state_province: Optional[CampaignText] = None
+    cities: List[CampaignText] = Field(min_length=1, max_length=20)
+    industry: CampaignText
+    target_quantity: int = Field(ge=1, le=100)
+    min_quality_score: int = Field(ge=0, le=100)
+    personal_email_enabled: bool | None = None
+    phone_enabled: bool | None = None
 @app.get("/api/sync-sequences")
 def sync_sequences(db: Session = Depends(get_db)):
-    from sqlalchemy import text
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at);"))
-            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at);"))
-            conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at);"))
-            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website_domain VARCHAR(255);"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_website_domain ON businesses (website_domain);"))
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS provider_health (
-                    id SERIAL PRIMARY KEY,
-                    provider_name VARCHAR(100) UNIQUE NOT NULL,
-                    state VARCHAR(50) NOT NULL DEFAULT 'unknown',
-                    message TEXT,
-                    last_http_status INTEGER,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-            """))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name);"))
-            conn.commit()
-    except Exception as e:
-        print(f"Schema alter error: {e}")
-
-    tables = [
-        "industry_configs", "campaigns", "campaign_locations", 
-        "provider_accounts", "job_runs", "businesses", 
-        "business_sources", "decision_makers", "scores", 
-        "opportunities", "crm_leads", "crm_activities"
-    ]
-    for table in tables:
-        try:
-            db.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), coalesce(max(id), 1), max(id) IS NOT null) FROM {table};"))
-        except Exception as e:
-            print(f"Failed on {table}: {e}")
-    db.commit()
-    return {"status": "synced", "schema": "verified"}
+    raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")
 
 
 @app.post("/api/campaigns")
 
-def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db)):
+def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
+        active_campaigns = db.query(Campaign.id).filter(Campaign.status.in_(("pending", "processing", "running"))).count()
+        if active_campaigns >= 3:
+            raise HTTPException(status_code=429, detail="Finish an active campaign before starting another one")
         # Create industry config if it doesn't exist
         industry = db.query(IndustryConfig).filter(IndustryConfig.name == req.industry).first()
         if not industry:
@@ -493,7 +461,8 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
             industry_id=industry.id,
             target_quantity=req.target_quantity,
             min_quality_score=req.min_quality_score,
-            status="processing"
+            status="processing",
+            settings={"created_by": user.id, "personal_email_enabled": user.personal_email_enabled if req.personal_email_enabled is None else req.personal_email_enabled, "phone_enabled": user.phone_enabled if req.phone_enabled is None else req.phone_enabled},
         )
         db.add(campaign)
         db.commit()
@@ -515,11 +484,11 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
         from worker import process_campaign_task
         task = process_campaign_task.apply_async(args=[campaign.id], queue='devacia_queue')
         return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id}
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=error_details)
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Campaign could not be started")
 
 CRM_STAGES = ("new", "reviewing", "contacted", "qualified", "needs_review", "proposal", "won", "lost", "archived")
 
@@ -588,27 +557,6 @@ def _format_contact(contact: DecisionMaker) -> dict:
         "source_url": contact.source_url,
         "confidence": contact.confidence,
     }
-
-
-def _ensure_crm_records(db: Session) -> None:
-    """Backfill CRM state for campaign leads created before the CRM existed."""
-    missing_businesses = (
-        db.query(Business.id, Business.status)
-        .outerjoin(CRMLead, CRMLead.business_id == Business.id)
-        .outerjoin(Campaign, Campaign.id == Business.campaign_id)
-        .filter(CRMLead.id.is_(None))
-        .filter(Business.deleted_at.is_(None))
-        .filter(or_(Campaign.id.is_(None), Campaign.deleted_at.is_(None)))
-        .filter(Business.status.in_([
-            "qualified", "needs_review", "needs_official_website", "needs_research", "needs_contact_enrichment"
-        ]))
-        .all()
-    )
-    if missing_businesses:
-        for b_id, b_status in missing_businesses:
-            stage = "qualified" if b_status == "qualified" else "needs_review"
-            db.add(CRMLead(business_id=b_id, stage=stage, source="campaign"))
-        db.commit()
 
 
 def _contacts_by_business(db: Session, business_ids: List[int]) -> dict:
@@ -785,7 +733,6 @@ def _get_crm_leads(
     page: int = 1,
     page_size: int = 50,
 ) -> dict:
-    _ensure_crm_records(db)
     query = (
         db.query(Business, Opportunity, Score, CRMLead, Campaign)
         .outerjoin(Opportunity, Opportunity.business_id == Business.id)
@@ -906,7 +853,6 @@ def _get_crm_lead_or_404(lead_id: int, db: Session) -> tuple[Business, CRMLead]:
     business = db.query(Business).filter(Business.id == lead_id).first()
     if not business:
         raise HTTPException(status_code=404, detail="Lead not found")
-    _ensure_crm_records(db)
     crm_lead = db.query(CRMLead).filter(CRMLead.business_id == lead_id).first()
     if not crm_lead:
         raise HTTPException(status_code=404, detail="CRM record not found")
@@ -1456,12 +1402,17 @@ def get_lead_details(lead_id: int, db: Session = Depends(get_db)):
     return lead
 
 
+class ContactLookupRequest(BaseModel):
+    personal_email_enabled: bool | None = None
+    phone_enabled: bool | None = None
+
+
 @app.post("/api/crm/leads/{lead_id}/enrich")
-def enrich_crm_lead_contacts(lead_id: int, db: Session = Depends(get_db)):
+def enrich_crm_lead_contacts(lead_id: int, options: ContactLookupRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Queue a safe refresh of Apollo decision-maker and public social data."""
     _get_crm_lead_or_404(lead_id, db)
-    task = enrich_lead_contacts_task.apply_async(args=[lead_id], queue='devacia_queue')
-    return {"status": "queued", "task_id": task.id, "message": "Apollo decision-maker enrichment has started."}
+    task = enrich_lead_contacts_task.apply_async(args=[lead_id], kwargs={"personal_email_enabled": user.personal_email_enabled if options.personal_email_enabled is None else options.personal_email_enabled, "phone_enabled": user.phone_enabled if options.phone_enabled is None else options.phone_enabled}, queue='devacia_queue')
+    return {"status": "queued", "task_id": task.id, "message": "Contact research queued with your selected lookup options."}
 
 @app.post("/api/leads/{lead_id}/export")
 def export_single_lead(lead_id: int, db: Session = Depends(get_db)):
@@ -1699,7 +1650,7 @@ CRITICAL RULES:
         import requests
 
         groq_provider = GroqProvider()
-        api_key = (getattr(groq_provider, 'api_key', None) or os.environ.get("GROQ_API_KEY", "")).strip() or "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"
+        api_key = "" if IS_STAGING else groq_provider.api_key
         if api_key:
             headers = {
                 "Authorization": f"Bearer {api_key}",

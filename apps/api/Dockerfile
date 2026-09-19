@@ -14,8 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev &
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
-COPY . .
+# Copy only runtime source. Local databases, environment files, provider
+# diagnostics and credentials never enter the image build context/layers.
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY core ./core
+COPY engines ./engines
+COPY providers ./providers
+COPY auth.py main.py worker.py start.sh ./
 
 # Expose port for FastAPI
 EXPOSE 8000

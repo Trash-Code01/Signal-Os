@@ -3,6 +3,10 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
 
+class OwnedRecord:
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+
+
 # ==========================================
 # SYSTEM / CONFIG
 # ==========================================
@@ -11,16 +15,23 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    google_sub = Column(String(255), unique=True, nullable=True)
+    name = Column(String(255), nullable=True)
+    role = Column(String(20), nullable=False, default="viewer", server_default="viewer")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    session_version = Column(Integer, nullable=False, default=0, server_default="0")
+    personal_email_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    phone_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), default=func.now(), server_default=func.now())
 
-class IndustryConfig(Base):
+class IndustryConfig(OwnedRecord, Base):
     __tablename__ = "industry_configs"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     signals = Column(JSON, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class DevaciaOffer(Base):
+class DevaciaOffer(OwnedRecord, Base):
     __tablename__ = "devacia_offers"
     id = Column(Integer, primary_key=True, index=True)
     industry_id = Column(Integer, ForeignKey("industry_configs.id"))
@@ -46,7 +57,7 @@ class ProviderHealth(Base):
 # ==========================================
 # CAMPAIGN
 # ==========================================
-class Campaign(Base):
+class Campaign(OwnedRecord, Base):
     __tablename__ = "campaigns"
     id = Column(Integer, primary_key=True, index=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
@@ -60,7 +71,7 @@ class Campaign(Base):
     
     industry = relationship("IndustryConfig")
 
-class CampaignLocation(Base):
+class CampaignLocation(OwnedRecord, Base):
     __tablename__ = "campaign_locations"
     id = Column(Integer, primary_key=True, index=True)
     campaign_id = Column(Integer, ForeignKey("campaigns.id"))
@@ -73,7 +84,7 @@ class CampaignLocation(Base):
     longitude = Column(Float)
     radius_km = Column(Float)
 
-class JobRun(Base):
+class JobRun(OwnedRecord, Base):
     __tablename__ = "job_runs"
     id = Column(Integer, primary_key=True, index=True)
     campaign_id = Column(Integer, ForeignKey("campaigns.id"))
@@ -87,7 +98,7 @@ class JobRun(Base):
 # ==========================================
 # BUSINESS / CORE
 # ==========================================
-class Business(Base):
+class Business(OwnedRecord, Base):
     __tablename__ = "businesses"
     id = Column(Integer, primary_key=True, index=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
@@ -118,7 +129,7 @@ class Business(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-class BusinessSource(Base):
+class BusinessSource(OwnedRecord, Base):
     __tablename__ = "business_sources"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -130,7 +141,7 @@ class BusinessSource(Base):
 # ==========================================
 # WEBSITE INTELLIGENCE
 # ==========================================
-class Website(Base):
+class Website(OwnedRecord, Base):
     __tablename__ = "websites"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -141,7 +152,7 @@ class Website(Base):
     framework = Column(String(100))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class WebsitePage(Base):
+class WebsitePage(OwnedRecord, Base):
     __tablename__ = "website_pages"
     id = Column(Integer, primary_key=True, index=True)
     website_id = Column(Integer, ForeignKey("websites.id"))
@@ -151,7 +162,7 @@ class WebsitePage(Base):
     status_code = Column(Integer)
     crawled_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class WebsiteTechnology(Base):
+class WebsiteTechnology(OwnedRecord, Base):
     __tablename__ = "website_technologies"
     id = Column(Integer, primary_key=True, index=True)
     website_id = Column(Integer, ForeignKey("websites.id"))
@@ -159,7 +170,7 @@ class WebsiteTechnology(Base):
     category = Column(String(100)) # analytics, booking, payment
     confidence = Column(Float)
 
-class WebsiteScreenshot(Base):
+class WebsiteScreenshot(OwnedRecord, Base):
     __tablename__ = "website_screenshots"
     id = Column(Integer, primary_key=True, index=True)
     website_page_id = Column(Integer, ForeignKey("website_pages.id"))
@@ -167,7 +178,7 @@ class WebsiteScreenshot(Base):
     s3_key_or_path = Column(String(2048))
     captured_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class WebsiteAudit(Base):
+class WebsiteAudit(OwnedRecord, Base):
     __tablename__ = "website_audits"
     id = Column(Integer, primary_key=True, index=True)
     website_id = Column(Integer, ForeignKey("websites.id"))
@@ -201,7 +212,7 @@ class WebsiteAudit(Base):
     
     audited_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class WebsiteEvidence(Base):
+class WebsiteEvidence(OwnedRecord, Base):
     __tablename__ = "website_evidence"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -213,7 +224,7 @@ class WebsiteEvidence(Base):
     confidence = Column(Float)
     collected_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class SocialProfile(Base):
+class SocialProfile(OwnedRecord, Base):
     __tablename__ = "social_profiles"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -224,7 +235,7 @@ class SocialProfile(Base):
 # ==========================================
 # PEOPLE
 # ==========================================
-class DecisionMaker(Base):
+class DecisionMaker(OwnedRecord, Base):
     __tablename__ = "decision_makers"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -245,7 +256,7 @@ class DecisionMaker(Base):
 # ==========================================
 # INTELLIGENCE
 # ==========================================
-class Score(Base):
+class Score(OwnedRecord, Base):
     __tablename__ = "scores"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -264,7 +275,7 @@ class Score(Base):
     evidence_ids = Column(JSON) # List of Evidence IDs supporting this score
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class Opportunity(Base):
+class Opportunity(OwnedRecord, Base):
     __tablename__ = "opportunities"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -280,7 +291,7 @@ class Opportunity(Base):
     evidence_ids = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-class AIAnalysis(Base):
+class AIAnalysis(OwnedRecord, Base):
     __tablename__ = "ai_analyses"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -297,7 +308,7 @@ class AIAnalysis(Base):
 # ==========================================
 # CRM WORKSPACE
 # ==========================================
-class CRMLead(Base):
+class CRMLead(OwnedRecord, Base):
     """Workspace-specific CRM state for a discovered or imported business."""
     __tablename__ = "crm_leads"
     id = Column(Integer, primary_key=True, index=True)
@@ -313,7 +324,7 @@ class CRMLead(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-class CRMActivity(Base):
+class CRMActivity(OwnedRecord, Base):
     """A simple, append-only activity timeline for the in-app CRM."""
     __tablename__ = "crm_activities"
     id = Column(Integer, primary_key=True, index=True)
@@ -326,7 +337,7 @@ class CRMActivity(Base):
 # ==========================================
 # LEGACY CRM & EXPORT
 # ==========================================
-class CRMNote(Base):
+class CRMNote(OwnedRecord, Base):
     __tablename__ = "crm_notes"
     id = Column(Integer, primary_key=True, index=True)
     business_id = Column(Integer, ForeignKey("businesses.id"))
@@ -334,7 +345,7 @@ class CRMNote(Base):
     created_by = Column(String(100))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class Export(Base):
+class Export(OwnedRecord, Base):
     __tablename__ = "exports"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255))
@@ -342,3 +353,6 @@ class Export(Base):
     status = Column(String(50))
     file_url = Column(String(2048))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# Register mandatory account scoping after all model classes are defined.
+from . import tenancy

@@ -1,6 +1,9 @@
 'use client';
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+
+import { useSession } from '@/components/SessionProvider';
+import { ContactOptions, LookupOptions } from '@/components/ContactOptions';
 
 type StageStatus = 'pending' | 'running' | 'done' | 'failed';
 
@@ -45,15 +48,29 @@ function JobsContent() {
   const [stats, setStats] = useState({ discovered: 0, qualified: 0, enriched: 0, needs_review: 0, rejected: 0, target: 0, elapsed: 0 });
   const [campaignStatus, setCampaignStatus] = useState('processing');
   const [summary, setSummary] = useState('');
+  const { user } = useSession();
+  const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
+  const loadedOptions = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const [optionMessage, setOptionMessage] = useState('');
+  async function saveOptions() {
+    if (!campaignId) return;
+    setSaving(true); setOptionMessage('');
+    try {
+      const response = await fetch(`/api/campaigns/${campaignId}/contact-options`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Unable to save options');
+      setOptionMessage('Saved. Applies to upcoming lookups; requests already sent may still finish.');
+    } catch (error) { setOptionMessage(error instanceof Error ? error.message : 'Unable to save options'); }
+    finally { setSaving(false); }
+  }
 
   useEffect(() => {
     if (!campaignId) return;
+    loadedOptions.current = false;
 
-    let ticker: ReturnType<typeof setInterval>;
-    let poller: ReturnType<typeof setInterval>;
-    
     // Tick elapsed time
-    ticker = setInterval(() => setStats(s => ({ ...s, elapsed: s.elapsed + 1 })), 1000);
+    const ticker = setInterval(() => setStats(s => ({ ...s, elapsed: s.elapsed + 1 })), 1000);
 
     // Poll API
     const fetchStatus = async () => {
@@ -65,6 +82,7 @@ function JobsContent() {
           setStages(data.stages);
           setCampaignStatus(data.status || 'processing');
           setSummary(data.summary || '');
+          if (!loadedOptions.current && data.contact_options) { setOptions(data.contact_options); loadedOptions.current = true; }
           setStats(s => ({ 
             ...s, 
             discovered: data.stats.discovered, 
@@ -84,8 +102,8 @@ function JobsContent() {
       }
     };
 
-    fetchStatus(); // initial call
-    poller = setInterval(fetchStatus, 3000); // poll every 3s
+    const poller = setInterval(fetchStatus, 3000); // poll every 3s
+    void fetchStatus(); // initial call
 
     return () => {
       clearInterval(ticker);
@@ -106,7 +124,7 @@ function JobsContent() {
       : 'bg-gradient-to-r from-purple-500 to-indigo-400';
 
   return (
-    <div className="p-10 max-w-5xl">
+    <div className="p-4 md:p-10 max-w-5xl">
       <div className="mb-8">
         <div className="flex items-center gap-2 text-zinc-500 text-sm mb-4">
           <a href="/campaigns" className="hover:text-white transition">Campaigns</a>
@@ -117,7 +135,7 @@ function JobsContent() {
           <div>
             <h1 className="text-3xl font-bold text-white">Pipeline Monitor</h1>
             <p className="text-zinc-400 mt-1">
-              {campaignId ? `Campaign #${campaignId}` : 'No campaign selected'} " watching all stages
+              {campaignId ? `Campaign #${campaignId}` : 'No campaign selected'} — watching all stages
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -156,6 +174,11 @@ function JobsContent() {
           <span>{overallPct}% complete</span>
         </div>
         {summary && <p className="mt-3 text-xs text-zinc-400">{summary}</p>}
+        {campaignId && <div className="mt-5 space-y-3">
+          <ContactOptions value={options} onChange={setOptions} disabled={saving || user?.role === 'viewer'} />
+          {user?.role !== 'viewer' && <button disabled={saving || !loadedOptions.current} onClick={saveOptions} className="rounded-lg bg-violet-600 px-4 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save campaign options'}</button>}
+          <p role="status" className="text-xs text-zinc-400">{optionMessage || 'These choices control upcoming paid contact requests for this campaign.'}</p>
+        </div>}
       </div>
 
       {/* Stage list */}

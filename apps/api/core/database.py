@@ -1,5 +1,6 @@
 import os
-from sqlalchemy import create_engine
+from . import runtime
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -11,7 +12,8 @@ if raw_url.startswith("postgresql://"):
     raw_url = raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
 DATABASE_URL = raw_url
 
-engine = create_engine(DATABASE_URL)
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite:") else {}
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

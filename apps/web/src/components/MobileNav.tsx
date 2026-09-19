@@ -1,11 +1,13 @@
 "use client";
 
+import { useSession } from '@/components/SessionProvider';
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Home, Magnet, Megaphone, PlusCircle } from "lucide-react";
 
 export function MobileNav() {
   const pathname = usePathname() || '';
+  const { user } = useSession();
 
   const links = [
     { href: "/dashboard", icon: Home, label: "Home" },
@@ -17,7 +19,7 @@ export function MobileNav() {
   return (
     <div className="md:hidden fixed bottom-0 left-0 w-full bg-[#121214]/90 backdrop-blur-md border-t border-zinc-800 pb-safe pt-2 z-50">
       <div className="flex justify-around items-center px-4 pb-2">
-        {links.map((link) => {
+        {links.filter(link => user?.role !== 'viewer' || link.href !== '/campaigns/new').map((link) => {
           const isActive = pathname.startsWith(link.href);
           const Icon = link.icon;
           return (

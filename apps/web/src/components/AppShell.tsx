@@ -4,6 +4,8 @@ import { useEffect } from 'react';
 import { Sidebar } from "@/components/Sidebar";
 import { MobileNav } from "@/components/MobileNav";
 
+import { useSession } from '@/components/SessionProvider';
+
 // Ping the backend every 13 minutes to prevent Render free tier from sleeping.
 // Render sleeps after 15 minutes of inactivity — this keeps it awake.
 const PING_INTERVAL_MS = 13 * 60 * 1000; // 13 minutes
@@ -21,6 +23,7 @@ function useBackendKeepalive() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || '';
+  const { user } = useSession();
   const isAuth = pathname === '/login';
   const appEnv = process.env.NEXT_PUBLIC_APP_ENV || (process.env.NEXT_PUBLIC_API_URL?.includes('localhost') || process.env.NEXT_PUBLIC_API_URL?.includes('127.0.0.1') ? 'staging' : 'production');
   const isStaging = appEnv === 'staging';
@@ -41,6 +44,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Staging Mode (Local)
           </div>
         )}
+        <div className="border-b border-zinc-800 px-4 py-2 text-xs text-zinc-400 flex flex-wrap justify-between gap-2"><span>{user?.email} · {user?.role} · Private account</span><a href="/settings" className="text-violet-300">Account settings</a></div>
+        {user?.role === 'viewer' && <div className="px-4 py-2 text-xs text-amber-300">Viewer access: read and export only.</div>}
         <div className="flex-1 min-w-0">
           {children}
         </div>

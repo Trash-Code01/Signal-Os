@@ -8,6 +8,7 @@ export const metadata: Metadata = {
 
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SessionProvider } from "@/components/SessionProvider";
 import { AppShell } from "@/components/AppShell";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -24,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-full flex bg-[#09090b] font-sans text-white" suppressHydrationWarning>
         <TooltipProvider>
           <SidebarProvider>
-            <AppShell>{children}</AppShell>
+            <SessionProvider><AppShell>{children}</AppShell></SessionProvider>
           </SidebarProvider>
         </TooltipProvider>
       </body>

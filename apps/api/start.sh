@@ -1,8 +1,7 @@
 #!/bin/bash
+set -euo pipefail
 echo "Running database migrations..."
 alembic upgrade head
-echo "Running seed script..."
-python seed.py
 echo "Starting Celery worker in background..."
 celery -A worker.celery_app worker --loglevel=info -P threads -Q devacia_queue,celery &
 echo "Starting Uvicorn..."

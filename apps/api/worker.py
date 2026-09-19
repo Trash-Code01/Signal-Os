@@ -1,3 +1,6 @@
+from core.runtime import IS_STAGING
+from core.contact_lookup import lookup_optional_contacts
+from core.tenancy import load_owned_job
 import asyncio
 import math
 import os
@@ -33,15 +36,15 @@ from core.models import (
 )
 from engines.scoring import ScoringEngine
 from engines.website_intelligence import WebsiteIntelligenceEngine
-from providers.snovio_provider import SnovioProvider
 from providers.discovery_factory import get_discovery_provider
 from providers.groq_provider import GroqProvider
-from providers.proxycurl_provider import ProxycurlProvider
 
 
 redis_url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 
-celery_app = Celery("devacia_worker", broker=redis_url, backend=redis_url)
+celery_app = Celery("devacia_worker", broker="memory://" if IS_STAGING else redis_url, backend="cache+memory://" if IS_STAGING else redis_url)
+if IS_STAGING:
+    celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -451,11 +454,11 @@ def _qualify_no_website_business(db, business: Business) -> int:
     ))
     _set_business_status(db, business, "qualified")
 
-    from providers.serper_search_provider import SerperSearchProvider
-
-    public_contacts = asyncio.run(
-        SerperSearchProvider().search_decision_makers(business.name, business.city)
-    )
+    campaign = db.get(Campaign, business.campaign_id) if business.campaign_id else None
+    if campaign:
+        db.refresh(campaign)
+    options = (campaign.settings or {}) if campaign else {}
+    public_contacts = asyncio.run(lookup_optional_contacts(business, options.get("personal_email_enabled", False), options.get("phone_enabled", False)))
     saved_contacts = 0
     for contact in public_contacts:
         contact["source"] = contact.get("source") or "google_search_fallback"
@@ -475,11 +478,13 @@ def _qualify_no_website_business(db, business: Business) -> int:
 
 
 @celery_app.task
-def enrich_lead_contacts_task(business_id: int):
-    """Refresh public, Snov.io, and Proxycurl contact intelligence for a CRM lead."""
+def enrich_lead_contacts_task(business_id: int, personal_email_enabled: bool = False, phone_enabled: bool = False):
+    """Refresh public contacts and only the requested paid contact lookups."""
+    if IS_STAGING:
+        return {"status": "completed", "contacts_added": 0, "mode": "mock"}
     db = SessionLocal()
     try:
-        business = db.query(Business).filter(Business.id == business_id).first()
+        business = load_owned_job(db, Business, business_id)
         if not business:
             return {"status": "skipped", "reason": "Lead not found"}
 
@@ -487,11 +492,7 @@ def enrich_lead_contacts_task(business_id: int):
         # prior implementation returned early here, leaving the highest-value
         # web-design prospects with no follow-up intelligence.
         if not business.website_url:
-            from providers.serper_search_provider import SerperSearchProvider
-
-            contacts = asyncio.run(
-                SerperSearchProvider().search_decision_makers(business.name, business.city)
-            )
+            contacts = asyncio.run(lookup_optional_contacts(business, personal_email_enabled, phone_enabled))
             saved = sum(int(_save_contact(db, business.id, contact)) for contact in contacts)
             db.add(CRMActivity(
                 business_id=business.id,
@@ -518,23 +519,14 @@ def enrich_lead_contacts_task(business_id: int):
         public_people = audit.get("public_people") or []
         website_contact_count += sum(int(_save_contact(db, business.id, person)) for person in public_people)
 
-        # 2. Serper Google-result fallback if no named professional exists.
-        serper_count = 0
-        from providers.serper_search_provider import SerperSearchProvider
-        # Check if we already found a professional named contact (from website or prior)
-        existing_professionals = [c for c in db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all() if c.contact_type == 'professional' and c.first_name and c.last_name]
-        
-        if not existing_professionals:
-            serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city))
-            serper_count = sum(int(_save_contact(db, business.id, contact)) for contact in serper_contacts)
-
-        
+        optional_contacts = asyncio.run(lookup_optional_contacts(business, personal_email_enabled, phone_enabled))
+        serper_count = sum(int(_save_contact(db, business.id, contact)) for contact in optional_contacts)
 
         total_contacts = website_contact_count + serper_count
         db.add(CRMActivity(
             business_id=business.id,
             activity_type="enrichment",
-            body=f"Contact research completed: {total_contacts} contacts found ({website_contact_count} from website, {serper_count} from Google web search) and {social_count} social profiles added.",
+            body=f"Contact research completed: {total_contacts} contacts found ({website_contact_count} from website, {serper_count} from optional lookups) and {social_count} social profiles added.",
             created_by="Lead Intelligence",
         ))
         db.commit()
@@ -590,9 +582,13 @@ def process_campaign_task(campaign_id: int):
     db = SessionLocal()
     job: Optional[JobRun] = None
     try:
-        campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+        campaign = load_owned_job(db, Campaign, campaign_id)
         if not campaign:
             return {"status": "failed", "reason": "Campaign not found"}
+
+        if IS_STAGING:
+            from core.staging_jobs import run_mock_campaign
+            return run_mock_campaign(db, campaign)
 
         job = JobRun(campaign_id=campaign_id, stage="lead_intelligence", status="running", metrics={})
         db.add(job)
@@ -737,8 +733,6 @@ def process_campaign_task(campaign_id: int):
         crawler = WebsiteIntelligenceEngine()
         scorer = ScoringEngine(industry_config)
         ai_sdr = GroqProvider()
-        proxycurl = ProxycurlProvider()
-        snovio = SnovioProvider(db_session=db)
         qualified_count = 0
         audited_count = 0
         enriched_count = 0
@@ -814,20 +808,11 @@ def process_campaign_task(campaign_id: int):
             if domain:
                 provider_contacts: List[Dict[str, Any]] = []
                 
-                # 2. Serper Google-result fallback if no named professional exists
-                from providers.serper_search_provider import SerperSearchProvider
-                existing_professionals = [c for c in db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all() if c.contact_type == 'professional' and c.first_name and c.last_name]
-                if not existing_professionals:
-                    serper_contacts = asyncio.run(SerperSearchProvider().search_decision_makers(business.name, business.city, domain))
-                    provider_contacts.extend(serper_contacts)
-                
-                
-                provider_contacts.extend(asyncio.run(
-                    snovio.find_emails(domain=domain, name=business.name)
-                ))
-                provider_contacts.extend(asyncio.run(
-                    proxycurl.get_executives(domain=domain)
-                ))
+                db.refresh(campaign)
+                options = campaign.settings or {}
+                provider_contacts.extend(asyncio.run(lookup_optional_contacts(
+                    business, options.get("personal_email_enabled", False), options.get("phone_enabled", False)
+                )))
                 for contact in provider_contacts:
                     enriched_count += int(_save_contact(db, business.id, contact))
                 db.commit()

@@ -1,6 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+
+import { useSession } from '@/components/SessionProvider';
+import { ContactOptions, LookupOptions } from '@/components/ContactOptions';
 
 const INDUSTRIES = [
   { value: 'roofing', label: 'Roofing', sub: ['Residential', 'Commercial', 'Storm Damage'] },
@@ -21,6 +24,10 @@ const RESEARCH_DEPTHS = [
 
 export default function NewCampaignPage() {
   const router = useRouter();
+  const { user } = useSession();
+  const [error, setError] = useState('');
+  const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
+  useEffect(() => { if (user) setOptions({ personal_email_enabled: user.personal_email_enabled, phone_enabled: user.phone_enabled }); }, [user]);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
@@ -41,6 +48,7 @@ export default function NewCampaignPage() {
 
   async function handleSubmit() {
     setLoading(true);
+    setError('');
     try {
       const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/campaigns`, {
@@ -54,22 +62,29 @@ export default function NewCampaignPage() {
           industry: form.industry,
           target_quantity: form.raw_target,
           min_quality_score: form.min_score,
+          ...options,
         }),
       });
       if (res.ok) {
         const data = await res.json();
         router.push(`/jobs?campaign=${data.campaign_id}`);
+      } else {
+        const data = await res.json();
+        setError(typeof data.detail === 'string' ? data.detail : 'Could not launch campaign.');
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
+      setError('Unable to launch campaign. Please retry.');
     }
     setLoading(false);
   }
+
+  if (user?.role === 'viewer') return <div className="p-10 text-zinc-400">Your Viewer role can read and export your data. Ask an admin for Member access to run campaigns.</div>;
 
   const STEPS = ['Geography', 'Industry', 'Targets', 'Research'];
 
   return (
     <div className="p-4 md:p-10 max-w-4xl pb-24 md:pb-10 mx-auto">
+      {error && <p role="alert" className="mb-4 text-red-400">{error}</p>}
       {/* Header */}
       <div className="mb-8 md:mb-10">
         <div className="hidden md:flex items-center gap-2 text-zinc-500 text-sm mb-4">
@@ -104,7 +119,7 @@ export default function NewCampaignPage() {
               </span>
               {s}
             </button>
-            {i < 3 && <span className="text-zinc-700 px-1">"</span>}
+            {i < 3 && <span className="text-zinc-700 px-1">&rarr;</span>}
           </div>
         ))}
       </div>
@@ -250,7 +265,7 @@ export default function NewCampaignPage() {
                 <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.a_plus_target} onChange={e => setForm({ ...form, a_plus_target: +e.target.value })} />
               </div>
               <div className="pt-2">
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A Target <span className="text-zinc-600 normal-case">(score 80"“89)</span></label>
+                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A Target <span className="text-zinc-600 normal-case">(score 80–89)</span></label>
                 <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.a_target} onChange={e => setForm({ ...form, a_target: +e.target.value })} />
               </div>
             </div>
@@ -290,6 +305,7 @@ export default function NewCampaignPage() {
               ))}
             </div>
 
+            <div className="mb-6"><ContactOptions value={options} onChange={setOptions} disabled={loading} /></div>
             {/* Summary */}
             <div className="border-t border-zinc-800/60 pt-5">
               <h3 className="text-xs text-zinc-400 uppercase tracking-wider mb-3">Campaign Summary</h3>

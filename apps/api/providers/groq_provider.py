@@ -1,3 +1,4 @@
+from core.runtime import IS_STAGING
 import os
 import json
 import time
@@ -47,7 +48,7 @@ class GroqProvider:
     MODEL = "qwen/qwen3.8-27b"   # Best reasoning model on this Groq account, avoids OTPM limits
 
     def __init__(self):
-        self.api_key = os.environ.get("GROQ_API_KEY", "").strip() or "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"
+        self.api_key = "" if IS_STAGING else os.environ.get("GROQ_API_KEY", "").strip()
         self.model_name = os.environ.get("GROQ_MODEL", self.MODEL)
         self._client = None
 
@@ -95,6 +96,8 @@ Analyze this business and return the JSON dossier:"""
             return None
 
         prompt = self._build_prompt(evidence, industry_config)
+        if IS_STAGING:
+            return None
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

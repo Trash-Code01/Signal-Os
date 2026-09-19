@@ -5,8 +5,6 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: devacia_prod_postgres
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_USER: devacia
       POSTGRES_PASSWORD: devacia_password
@@ -21,8 +19,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: devacia_prod_redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_prod_data:/data
     restart: always

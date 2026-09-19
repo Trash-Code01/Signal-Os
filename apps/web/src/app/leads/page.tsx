@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, Suspense } from "react";
+import { useSession } from '@/components/SessionProvider';
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw , PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import ExportDropdown, { ExportFormat, ExportScope } from "@/components/ExportDropdown";
@@ -99,6 +100,7 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
 
 function LeadsPipelineContent() {
   const router = useRouter();
+  const { user } = useSession();
   const searchParams = useSearchParams();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [leads, setLeads] = useState<any[]>([]);
@@ -480,7 +482,7 @@ function LeadsPipelineContent() {
             />
             <div className="w-px h-5 bg-zinc-700"></div>
             <button 
-              onClick={() => handleBulkAction('delete')}
+              disabled={user?.role === 'viewer'} onClick={() => handleBulkAction('delete')}
               className="flex items-center gap-1.5 text-red-400 hover:text-red-300 font-medium transition text-xs"
             >
               Move to Trash

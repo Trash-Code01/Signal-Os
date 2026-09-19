@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSession } from '@/components/SessionProvider';
 import { useRouter } from "next/navigation";
 import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw , PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
@@ -97,6 +98,7 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
 
 export default function TrashBin() {
   const router = useRouter();
+  const { user } = useSession();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [leads, setLeads] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -414,13 +416,13 @@ export default function TrashBin() {
             <div className="w-px h-6 bg-zinc-700"></div>
             <div className="flex items-center gap-4">
               <button 
-                onClick={() => handleBulkAction('recover')}
+                disabled={user?.role === 'viewer'} onClick={() => handleBulkAction('recover')}
                 className="flex items-center gap-2 text-emerald-400 hover:text-emerald-300 font-medium transition"
               >
                 Recover
               </button>
               <button 
-                onClick={() => handleBulkAction('permanent')}
+                disabled={user?.role !== 'admin'} onClick={() => handleBulkAction('permanent')}
                 className="flex items-center gap-2 text-red-500 hover:text-red-400 font-medium transition"
               >
                 Delete Permanently

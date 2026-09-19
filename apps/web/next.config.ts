@@ -3,6 +3,8 @@
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 const nextConfig: NextConfig = {
+  // Keep verification builds separate from a running development server.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   output: 'standalone',
   eslint: {
     ignoreDuringBuilds: true,

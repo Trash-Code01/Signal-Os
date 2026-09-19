@@ -1,3 +1,4 @@
+from core.runtime import IS_STAGING
 import os
 import aiohttp
 from typing import List, Dict, Any
@@ -5,7 +6,7 @@ from core.provider_health import report_provider_state
 
 class ProxycurlProvider:
     def __init__(self):
-        self.api_key = os.environ.get('PROXYCURL_API_KEY', '').strip() or 'bbb15a7be7504d4ca3fd3a0c8836a3ce'
+        self.api_key = "" if IS_STAGING else os.environ.get('PROXYCURL_API_KEY', '').strip()
         self.base_url = "https://nubela.co/api/v1/company/details"
 
     async def get_executives(self, domain: str) -> List[Dict[str, Any]]:
