@@ -47,7 +47,7 @@ def authorize_request(request: Request, db: Session = Depends(get_db)):
         defaults = {"http://localhost:3001", "http://127.0.0.1:3001", "http://localhost:3000", "http://127.0.0.1:3000", "https://devacia-frontend.onrender.com"}
         origins = configured | defaults
         req_origin = (request.headers.get("origin") or "").rstrip("/")
-        if req_origin and req_origin not in origins:
+        if not req_origin or req_origin not in origins:
             raise HTTPException(403, "Invalid request origin")
     admin_only = path.startswith("/api/auth/users") or path.startswith("/api/migrate-") or path in {"/api/setup-admin", "/api/providers/status"} or sensitive_get or path.endswith("/permanent")
     if admin_only and user.role != "admin":

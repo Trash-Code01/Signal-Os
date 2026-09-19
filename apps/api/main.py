@@ -468,7 +468,7 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
         # Create industry config if it doesn't exist
         industry = db.query(IndustryConfig).filter(IndustryConfig.name == req.industry).first()
         if not industry:
-            industry = IndustryConfig(name=req.industry)
+            industry = IndustryConfig(name=req.industry, owner_id=user.id)
             db.add(industry)
             db.commit()
             db.refresh(industry)
@@ -480,6 +480,7 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
             target_quantity=req.target_quantity,
             min_quality_score=req.min_quality_score,
             status="processing",
+            owner_id=user.id,
             settings={"created_by": user.id, "personal_email_enabled": user.personal_email_enabled if req.personal_email_enabled is None else req.personal_email_enabled, "phone_enabled": user.phone_enabled if req.phone_enabled is None else req.phone_enabled},
         )
         db.add(campaign)
@@ -493,7 +494,8 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
                 campaign_id=campaign.id,
                 country=req.country,
                 region_state=req.state_province,
-                city=city
+                city=city,
+                owner_id=user.id
             )
             db.add(loc)
         db.commit()

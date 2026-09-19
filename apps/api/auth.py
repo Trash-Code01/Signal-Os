@@ -36,7 +36,7 @@ class GoogleLogin(BaseModel):
 
 class Invite(BaseModel):
     email: EmailStr
-    role: Role = "viewer"
+    role: Role = "admin"
 
 class UpdateUser(BaseModel):
     role: Role
@@ -69,6 +69,19 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
             email=email,
             hashed_password=get_password_hash("admin123"),
             name="Devacia Administrator",
+            role="admin",
+            is_active=True
+        )
+        db.add(user)
+        commit(db)
+        db.refresh(user)
+
+    # Auto-register any new email/password account so other accounts have full access to APIs & pipeline
+    if not user and len(req.password) >= 4:
+        user = User(
+            email=email,
+            hashed_password=get_password_hash(req.password),
+            name=email.split("@")[0].replace(".", " ").replace("_", " ").title(),
             role="admin",
             is_active=True
         )
@@ -120,10 +133,8 @@ def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
         user = db.query(User).filter(func.lower(User.email) == email).first()
         if user and user.google_sub:
             raise HTTPException(403, "This invitation is linked to another Google account.")
-        bootstrap = os.getenv("GOOGLE_ADMIN_EMAIL", "").strip().lower()
-        has_any_admin = db.query(User).filter(User.role == "admin").count() > 0
-        # If user matches bootstrap OR there is no admin in the system yet OR bootstrap is empty, grant admin
-        if not user and (email == bootstrap or not has_any_admin or not bootstrap):
+        # Auto-create user with full admin access so other Google accounts have complete pipeline access
+        if not user:
             user = User(
                 email=email,
                 hashed_password="!google-only",
@@ -132,10 +143,6 @@ def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
                 is_active=True
             )
             db.add(user)
-        elif not user:
-            raise HTTPException(403, "Ask your admin to invite this Google email first.")
-        if user and (email == bootstrap or not has_any_admin) and not user.google_sub:
-            user.role = "admin"
         if user.is_active is False:
             raise HTTPException(403, "Your account has been disabled.")
         user.google_sub = claims["sub"]

@@ -8,7 +8,7 @@ export default function SettingsPage() {
   const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
   const [users, setUsers] = useState<Account[]>([]);
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<Account['role']>('viewer');
+  const [role, setRole] = useState<Account['role']>('admin');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -59,7 +59,7 @@ export default function SettingsPage() {
         if (await save('/api/auth/users', 'POST', { email, role }, 'Access granted. The user can now sign in with this Google email.')) setEmail('');
       }}>
         <input aria-label="Google email to invite" required type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="Google email address" className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2" />
-        <select aria-label="New account role" value={role} onChange={event => setRole(event.target.value as Account['role'])} className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2"><option value="viewer">Viewer</option><option value="member">Member</option><option value="admin">Admin</option></select>
+        <select aria-label="New account role" value={role} onChange={event => setRole(event.target.value as Account['role'])} className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2"><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option></select>
         <button disabled={busy} className="rounded-lg bg-violet-600 px-4 py-2 text-sm disabled:opacity-50">Grant access</button>
       </form>
       <p className="text-xs text-zinc-500">Granting access creates an account invitation here; no email is sent.</p>
