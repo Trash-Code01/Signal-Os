@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, Suspense } from "react";
 import { useSession } from '@/components/SessionProvider';
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw , PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw, PanelLeftClose, PanelLeftOpen, Globe, User, Mail, Phone, Copy, Check } from "lucide-react";
 import ExportDropdown, { ExportFormat, ExportScope } from "@/components/ExportDropdown";
 import { exportLeads } from "@/lib/exportUtils";
 
@@ -139,6 +139,50 @@ function LeadsPipelineContent() {
   const [showFilters, setShowFilters] = useState(false);
   const statusTab = "active";
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [contactMode, setContactMode] = useState<'crawl' | 'personal'>('crawl');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyToClipboard = (e: React.MouseEvent, text: string, id: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const getLeadContactInfo = (lead: any, mode: 'crawl' | 'personal') => {
+    if (mode === 'crawl') {
+      const crawlEmail = lead.crawl_email || lead.contacts?.find((c: any) => 
+        c.email && !c.source?.includes('snovio') && !c.source?.includes('proxycurl') && !c.source?.includes('apollo')
+      )?.email || (!lead.contacts?.some((c: any) => c.source?.includes('snovio')) ? lead.contacts?.[0]?.email : null);
+      
+      const crawlPhone = lead.crawl_phone || lead.phone || lead.contacts?.find((c: any) => 
+        c.phone && !c.source?.includes('snovio') && !c.source?.includes('proxycurl')
+      )?.phone;
+
+      return {
+        email: crawlEmail || null,
+        phone: crawlPhone || null,
+        name: null,
+        title: null,
+      };
+    } else {
+      const personalContact = lead.contacts?.find((c: any) => 
+        c.source?.includes('snovio') || c.source?.includes('proxycurl') || c.source?.includes('apollo') || c.contact_type === 'personal'
+      ) || lead.contacts?.find((c: any) => c.name && c.name !== 'Unknown contact' && c.contact_type !== 'company');
+
+      const personalEmail = lead.personal_email || personalContact?.email || null;
+      const personalPhone = lead.personal_phone || personalContact?.phone || personalContact?.mobile || null;
+      const personalName = lead.personal_name || personalContact?.name || null;
+      const personalTitle = lead.personal_title || personalContact?.title || null;
+
+      return {
+        email: personalEmail,
+        phone: personalPhone,
+        name: personalName,
+        title: personalTitle,
+      };
+    }
+  };
 
   const loadLeads = useCallback(async () => {
     setLoading(true);
@@ -261,6 +305,37 @@ function LeadsPipelineContent() {
               </span>
             )}
             <div className="ml-auto flex items-center gap-3">
+              {/* Contact Mode Toggle: Crawl (Default) vs Personal */}
+              <div className="flex items-center bg-[#121214] border border-zinc-800 rounded-lg p-0.5 gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => setContactMode('crawl')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
+                    contactMode === 'crawl'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800/40'
+                  }`}
+                  title="Show crawled website email & business phone number from site crawl"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>Crawl Contacts</span>
+                  <span className="text-[9px] px-1 py-0.2 rounded bg-purple-700/60 text-purple-200 uppercase font-bold tracking-wider">Default</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setContactMode('personal')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
+                    contactMode === 'personal'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800/40'
+                  }`}
+                  title="Show personal decision maker work emails & direct phone numbers"
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Personal Contacts</span>
+                </button>
+              </div>
+
               <span className="text-xs text-zinc-500 whitespace-nowrap">{total} results</span>
               <ExportDropdown
                 totalCount={total || leads.length}
@@ -298,13 +373,22 @@ function LeadsPipelineContent() {
                     <th className="text-left px-4 py-3 font-semibold">Location</th>
                     <th className="text-left px-4 py-3 font-semibold">Score</th>
                     <th className="text-left px-4 py-3 font-semibold">Stage</th>
-                    <th className="text-left px-4 py-3 font-semibold">Contact</th>
+                    <th className="text-left px-4 py-3 font-semibold">
+                      <div className="flex items-center gap-1.5">
+                        <span>Contact</span>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded uppercase font-semibold ${
+                          contactMode === 'crawl' ? 'bg-zinc-800 text-zinc-300' : 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                        }`}>
+                          {contactMode === 'crawl' ? 'Crawl' : 'Personal'}
+                        </span>
+                      </div>
+                    </th>
                     <th className="text-left px-4 py-3 font-semibold">Campaign</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/30">
                   {leads.map((lead) => {
-                    const contact = lead.contacts?.[0];
+                    const info = getLeadContactInfo(lead, contactMode);
                     return (
                       <tr key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}
                         className="hover:bg-white/[0.03] cursor-pointer transition-colors group">
@@ -333,19 +417,109 @@ function LeadsPipelineContent() {
                           </span>
                         </td>
                         <td className="px-4 py-3.5">
-                          {contact ? (
-                            <div>
-                              <div className="flex items-center gap-1.5 mb-0.5">
-                                <p className="text-white text-xs font-medium truncate max-w-[150px]">{contact.name}</p>
-                                {contact.source && (
-                                  <span className="text-[9px] uppercase tracking-wider text-zinc-500 bg-zinc-800/50 px-1.5 py-0.5 rounded">
-                                    {contact.source}
-                                  </span>
+                          {contactMode === 'crawl' ? (
+                            // Crawl Mode: Crawled website email + Crawled phone number
+                            (info.email || info.phone) ? (
+                              <div className="space-y-1">
+                                {info.email ? (
+                                  <div
+                                    onClick={(e) => copyToClipboard(e, info.email!, `crawl-e-${lead.id}`)}
+                                    className="flex items-center gap-1.5 text-xs text-zinc-200 hover:text-purple-300 transition-colors group/item"
+                                    title="Click to copy crawl email"
+                                  >
+                                    <Mail className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                                    <span className="truncate max-w-[150px] font-mono text-[11px]">{info.email}</span>
+                                    {copiedId === `crawl-e-${lead.id}` ? (
+                                      <Check className="w-3 h-3 text-green-400 shrink-0" />
+                                    ) : (
+                                      <Copy className="w-3 h-3 text-zinc-600 group-hover/item:text-zinc-400 shrink-0 opacity-0 group-hover/item:opacity-100" />
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-zinc-600 text-[11px] italic block">No crawl email</span>
+                                )}
+                                {info.phone ? (
+                                  <div
+                                    onClick={(e) => copyToClipboard(e, info.phone!, `crawl-p-${lead.id}`)}
+                                    className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-emerald-300 transition-colors group/item"
+                                    title="Click to copy crawl phone"
+                                  >
+                                    <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span className="truncate max-w-[150px] font-mono text-[11px]">{info.phone}</span>
+                                    {copiedId === `crawl-p-${lead.id}` ? (
+                                      <Check className="w-3 h-3 text-green-400 shrink-0" />
+                                    ) : (
+                                      <Copy className="w-3 h-3 text-zinc-600 group-hover/item:text-zinc-400 shrink-0 opacity-0 group-hover/item:opacity-100" />
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-zinc-600 text-[11px] italic block">No crawl phone</span>
                                 )}
                               </div>
-                              {contact.email && <p className="text-emerald-400 text-xs truncate max-w-[150px]">{contact.email}</p>}
-                            </div>
-                          ) : <span className="text-zinc-600 text-xs italic">No contact</span>}
+                            ) : (
+                              <span className="text-zinc-600 text-xs italic">No crawl contacts</span>
+                            )
+                          ) : (
+                            // Personal Mode: Personal email + Personal phone + Decision maker name
+                            (info.email || info.phone || info.name) ? (
+                              <div className="space-y-1">
+                                {info.name && (
+                                  <div className="flex items-center gap-1 mb-0.5">
+                                    <User className="w-3 h-3 text-zinc-400 shrink-0" />
+                                    <p className="text-white text-xs font-medium truncate max-w-[140px]">
+                                      {info.name}
+                                      {info.title && <span className="text-zinc-500 text-[10px] ml-1 font-normal font-sans">({info.title})</span>}
+                                    </p>
+                                  </div>
+                                )}
+                                {info.email ? (
+                                  <div
+                                    onClick={(e) => copyToClipboard(e, info.email!, `pers-e-${lead.id}`)}
+                                    className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors group/item"
+                                    title="Click to copy personal email"
+                                  >
+                                    <Mail className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span className="truncate max-w-[150px] font-mono text-[11px]">{info.email}</span>
+                                    {copiedId === `pers-e-${lead.id}` ? (
+                                      <Check className="w-3 h-3 text-green-400 shrink-0" />
+                                    ) : (
+                                      <Copy className="w-3 h-3 text-zinc-600 group-hover/item:text-zinc-400 shrink-0 opacity-0 group-hover/item:opacity-100" />
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-zinc-600 text-[11px] italic block">No personal email</span>
+                                )}
+                                {info.phone ? (
+                                  <div
+                                    onClick={(e) => copyToClipboard(e, info.phone!, `pers-p-${lead.id}`)}
+                                    className="flex items-center gap-1.5 text-xs text-zinc-300 hover:text-emerald-300 transition-colors group/item"
+                                    title="Click to copy personal phone"
+                                  >
+                                    <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    <span className="truncate max-w-[150px] font-mono text-[11px]">{info.phone}</span>
+                                    {copiedId === `pers-p-${lead.id}` ? (
+                                      <Check className="w-3 h-3 text-green-400 shrink-0" />
+                                    ) : (
+                                      <Copy className="w-3 h-3 text-zinc-600 group-hover/item:text-zinc-400 shrink-0 opacity-0 group-hover/item:opacity-100" />
+                                    )}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div>
+                                <span className="text-zinc-500 text-xs italic block">No personal contact</span>
+                                {(lead.crawl_email || lead.phone) && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); setContactMode('crawl'); }}
+                                    className="text-[10px] text-purple-400 hover:text-purple-300 underline mt-0.5 block"
+                                  >
+                                    View crawl contact
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          )}
                         </td>
                         <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap max-w-[140px] truncate">{lead.campaign_name || ""}</td>
                       </tr>
@@ -369,7 +543,7 @@ function LeadsPipelineContent() {
             <p className="text-sm text-zinc-500">Enriched business prospects.</p>
           </div>
 
-          <div className="flex gap-3 mb-5">
+          <div className="flex gap-3 mb-3">
             <div className="relative flex-1">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4" />
               <input type="text" placeholder="Search companies..." value={filters.q} onChange={(e) => updateFilters({ q: e.target.value })}
@@ -391,6 +565,35 @@ function LeadsPipelineContent() {
             </button>
           </div>
 
+          {/* Mobile Contact Mode Toggle */}
+          <div className="flex items-center bg-[#121214] border border-zinc-800 rounded-xl p-1 gap-1 mb-4">
+            <button
+              type="button"
+              onClick={() => setContactMode('crawl')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition ${
+                contactMode === 'crawl'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>Crawl Contacts</span>
+              <span className="text-[9px] px-1 py-0.2 rounded bg-purple-700/60 text-purple-200 uppercase font-bold">Default</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setContactMode('personal')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition ${
+                contactMode === 'personal'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>Personal Contacts</span>
+            </button>
+          </div>
+
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
               <Loader2 className="w-8 h-8 animate-spin mb-4 text-purple-500" /><p>Loading leads...</p>
@@ -403,7 +606,7 @@ function LeadsPipelineContent() {
           ) : (
             <div className="space-y-3">
               {leads.map((lead) => {
-                const contact = lead.contacts?.[0];
+                const info = getLeadContactInfo(lead, contactMode);
                 return (
                   <div key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}
                     className="bg-[#121214] rounded-2xl p-4 cursor-pointer active:scale-[0.98] transition-all border border-transparent hover:border-zinc-800">
@@ -416,17 +619,58 @@ function LeadsPipelineContent() {
                       <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase ${stageColor[lead.stage?.toLowerCase()] || "bg-zinc-800 text-zinc-300"}`}>
                         {lead.stage || "new"}
                       </span>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-semibold ml-auto ${
+                        contactMode === 'crawl' ? 'bg-zinc-800 text-zinc-400' : 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                      }`}>
+                        {contactMode === 'crawl' ? 'Crawl' : 'Personal'}
+                      </span>
                     </div>
                     <div className="bg-[#09090b] rounded-xl p-3">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <p className="text-sm font-medium text-white truncate">{contact?.name || "No primary contact"}</p>
-                        {contact?.source && (
-                          <span className="text-[9px] uppercase tracking-wider text-zinc-500 bg-zinc-800/50 px-1.5 py-0.5 rounded">
-                            {contact.source}
-                          </span>
-                        )}
-                      </div>
-                      {contact?.email ? <p className="text-xs text-emerald-400 truncate">{contact.email}</p> : <p className="text-xs text-zinc-600">Contact details pending</p>}
+                      {contactMode === 'crawl' ? (
+                        (info.email || info.phone) ? (
+                          <div className="space-y-1.5">
+                            {info.email && (
+                              <div className="flex items-center gap-2 text-xs text-zinc-200">
+                                <Mail className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                                <span className="font-mono text-xs truncate">{info.email}</span>
+                              </div>
+                            )}
+                            {info.phone && (
+                              <div className="flex items-center gap-2 text-xs text-zinc-300">
+                                <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                <span className="font-mono text-xs">{info.phone}</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-zinc-600 italic">No crawl contacts discovered on website</p>
+                        )
+                      ) : (
+                        (info.email || info.phone || info.name) ? (
+                          <div className="space-y-1.5">
+                            {info.name && (
+                              <div className="flex items-center gap-1.5 text-xs text-white font-medium">
+                                <User className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                                <span className="truncate">{info.name} {info.title ? `(${info.title})` : ''}</span>
+                              </div>
+                            )}
+                            {info.email && (
+                              <div className="flex items-center gap-2 text-xs text-emerald-400 font-mono">
+                                <Mail className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate">{info.email}</span>
+                              </div>
+                            )}
+                            {info.phone && (
+                              <div className="flex items-center gap-2 text-xs text-zinc-300 font-mono">
+                                <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                <span>{info.phone}</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-zinc-600 italic">No personal contact found</p>
+                        )
+                      )}
                     </div>
                   </div>
                 );

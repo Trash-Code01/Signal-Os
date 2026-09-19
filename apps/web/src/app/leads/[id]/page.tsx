@@ -22,6 +22,7 @@ export default function LeadDossier() {
   const [isGeneratingEmail, setIsGeneratingEmail] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [contactViewMode, setContactViewMode] = useState<'crawl' | 'personal' | 'all'>('crawl');
 
   const handleCopy = async (text: string, id: string) => {
     try {
@@ -326,252 +327,337 @@ export default function LeadDossier() {
             {/* Section: Contacts Workspace */}
             <section className="group space-y-6">
               <div className="mb-5"><ContactOptions value={options} onChange={setOptions} disabled={isRefreshing || user?.role === 'viewer'} />{researchMessage && <p role="status" className="mt-2 text-xs text-zinc-400">{researchMessage}</p>}</div>
-              {/* 1. Website & General Contacts Container */}
-              <div>
-                <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
-                  <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[16px]">manage_accounts</span> Website & General Contacts
-                    <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
-                      {crawlEmails.length} {crawlEmails.length === 1 ? "email" : "emails"} • {crawlPhones.length} {crawlPhones.length === 1 ? "phone" : "phones"}
-                    </span>
-                  </h2>
-                  <button onClick={handleRefreshResearch} disabled={isRefreshing || user?.role === 'viewer'} className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50">
-                    <span className={`material-symbols-outlined text-[14px] ${isRefreshing ? "animate-spin" : ""}`}>refresh</span>
-                    {isRefreshing ? "Refreshing..." : "Refresh contacts"}
+              {/* Contact Mode Toggle: Crawl (Default) vs Personal vs All */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-[#1a1919] border border-outline-variant/30 rounded-xl p-2 gap-2 mb-6">
+                <div className="flex items-center gap-1 bg-[#121214] p-1 rounded-lg border border-outline-variant/20">
+                  <button
+                    type="button"
+                    onClick={() => setContactViewMode('crawl')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                      contactViewMode === 'crawl'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-outline hover:text-primary hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[15px]">language</span>
+                    <span>Crawl Contacts</span>
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-700/60 text-purple-200 uppercase font-bold tracking-wider">Default</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContactViewMode('personal')}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                      contactViewMode === 'personal'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-outline hover:text-primary hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[15px]">person</span>
+                    <span>Personal Contacts</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContactViewMode('all')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition ${
+                      contactViewMode === 'all'
+                        ? 'bg-surface-container-high text-primary border border-outline-variant/40'
+                        : 'text-outline hover:text-primary hover:bg-white/5'
+                    }`}
+                  >
+                    <span>All Contacts</span>
                   </button>
                 </div>
-
-                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5 space-y-4">
-                  {/* Emails */}
-                  <div>
-                    <div className="text-[10px] font-semibold text-outline uppercase tracking-wider mb-2 flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[14px]">mail</span> Crawled Website Emails
-                      </span>
-                      <span className="text-[10px] text-outline/60 lowercase">click to copy</span>
-                    </div>
-                    {crawlEmails.length > 0 ? (
-                      <div className="flex flex-wrap gap-2.5">
-                        {crawlEmails.map((item, idx) => (
-                          <div
-                            key={idx}
-                            onClick={() => handleCopy(item.email, `crawl-email-${idx}`)}
-                            className="group flex items-center gap-2 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-[0.98]"
-                            title="Click to copy email"
-                          >
-                            <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">mail</span>
-                            <span className="text-sm font-serif text-[#4ade80] break-all">{item.email}</span>
-                            <span className="material-symbols-outlined text-outline group-hover:text-primary text-[14px] ml-1 shrink-0">
-                              {copiedId === `crawl-email-${idx}` ? "check" : "content_copy"}
-                            </span>
-                            {copiedId === `crawl-email-${idx}` && (
-                              <span className="text-[10px] text-[#4ade80] font-semibold animate-in fade-in">Copied!</span>
-                            )}
-                            {item.sourceUrl && (
-                              <a
-                                href={item.sourceUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-[10px] text-outline hover:text-primary border-l border-outline-variant/30 pl-2 ml-1"
-                                title="View Evidence Source"
-                              >
-                                Evidence
-                              </a>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-outline italic py-1">No public emails discovered on website.</div>
-                    )}
-                  </div>
-
-                  {/* Phone Numbers */}
-                  <div className="pt-3 border-t border-outline-variant/20">
-                    <div className="text-[10px] font-semibold text-outline uppercase tracking-wider mb-2 flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-[14px]">call</span> Phone Numbers
-                      </span>
-                      <span className="text-[10px] text-outline/60 lowercase">click to copy</span>
-                    </div>
-                    {crawlPhones.length > 0 ? (
-                      <div className="flex flex-wrap gap-2.5">
-                        {crawlPhones.map((phone, idx) => (
-                          <div
-                            key={idx}
-                            onClick={() => handleCopy(phone, `crawl-phone-${idx}`)}
-                            className="group flex items-center gap-2 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-[0.98]"
-                            title="Click to copy phone"
-                          >
-                            <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">phone</span>
-                            <span className="text-sm font-serif text-[#4ade80]">{phone}</span>
-                            <span className="material-symbols-outlined text-outline group-hover:text-primary text-[14px] ml-1 shrink-0">
-                              {copiedId === `crawl-phone-${idx}` ? "check" : "content_copy"}
-                            </span>
-                            {copiedId === `crawl-phone-${idx}` && (
-                              <span className="text-[10px] text-[#4ade80] font-semibold animate-in fade-in">Copied!</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-outline italic py-1">No phone numbers captured.</div>
-                    )}
-                  </div>
+                <div className="text-[11px] text-outline font-mono pr-2">
+                  {contactViewMode === 'crawl' && `${crawlEmails.length} crawl emails • ${crawlPhones.length} phones`}
+                  {contactViewMode === 'personal' && `${snovioList.length} personal emails • ${decisionMakers.length} leaders`}
+                  {contactViewMode === 'all' && `${contactsList.length} total contact records`}
                 </div>
               </div>
 
-              {/* 2. SNOV.IO Personal Emails Container */}
-              <div>
-                <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
-                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[14px]">radar</span> SNOV.IO PERSONAL EMAILS
-                    <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
-                      {snovioList.length} {snovioList.length === 1 ? "email" : "emails"}
-                    </span>
-                  </h3>
-                </div>
-                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5">
-                  {snovioList.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {snovioList.map((c: any, idx: number) => (
-                        <div
-                          key={idx}
-                          onClick={() => c.email && handleCopy(c.email, `snovio-${idx}`)}
-                          className={`flex items-start justify-between gap-3 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 p-3 rounded-lg transition-all ${c.email ? "cursor-pointer active:scale-[0.98]" : ""}`}
-                          title={c.email ? "Click to copy email" : ""}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">alternate_email</span>
-                              <span className="text-sm font-serif text-[#4ade80] truncate font-medium break-all">
-                                {c.email || "No email"}
+              {/* 1. Website & General Contacts Container */}
+              {(contactViewMode === 'crawl' || contactViewMode === 'all') && (
+                <div>
+                  <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
+                    <h2 className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-widest flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[16px]">manage_accounts</span> Website & General Contacts
+                      <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
+                        {crawlEmails.length} {crawlEmails.length === 1 ? "email" : "emails"} • {crawlPhones.length} {crawlPhones.length === 1 ? "phone" : "phones"}
+                      </span>
+                    </h2>
+                    <button onClick={handleRefreshResearch} disabled={isRefreshing || user?.role === 'viewer'} className="text-xs text-outline hover:text-primary border border-outline-variant/40 px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                      <span className={`material-symbols-outlined text-[14px] ${isRefreshing ? "animate-spin" : ""}`}>refresh</span>
+                      {isRefreshing ? "Refreshing..." : "Refresh contacts"}
+                    </button>
+                  </div>
+
+                  <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5 space-y-4">
+                    {/* Emails */}
+                    <div>
+                      <div className="text-[10px] font-semibold text-outline uppercase tracking-wider mb-2 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-[14px]">mail</span> Crawled Website Emails
+                        </span>
+                        <span className="text-[10px] text-outline/60 lowercase">click to copy</span>
+                      </div>
+                      {crawlEmails.length > 0 ? (
+                        <div className="flex flex-wrap gap-2.5">
+                          {crawlEmails.map((item, idx) => (
+                            <div
+                              key={idx}
+                              onClick={() => handleCopy(item.email, `crawl-email-${idx}`)}
+                              className="group flex items-center gap-2 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-[0.98]"
+                              title="Click to copy email"
+                            >
+                              <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">mail</span>
+                              <span className="text-sm font-serif text-[#4ade80] break-all">{item.email}</span>
+                              <span className="material-symbols-outlined text-outline group-hover:text-primary text-[14px] ml-1 shrink-0">
+                                {copiedId === `crawl-email-${idx}` ? "check" : "content_copy"}
                               </span>
-                              {c.verification_status === "verified" && (
-                                <span className="text-[9px] bg-[#4ade80]/15 text-[#4ade80] border border-[#4ade80]/30 px-1.5 py-0.2 rounded font-semibold uppercase shrink-0">
-                                  Verified
-                                </span>
+                              {copiedId === `crawl-email-${idx}` && (
+                                <span className="text-[10px] text-[#4ade80] font-semibold animate-in fade-in">Copied!</span>
+                              )}
+                              {item.sourceUrl && (
+                                <a
+                                  href={item.sourceUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-[10px] text-outline hover:text-primary border-l border-outline-variant/30 pl-2 ml-1"
+                                  title="View Evidence Source"
+                                >
+                                  Evidence
+                                </a>
                               )}
                             </div>
-                            {(c.name || c.title) && (
-                              <p className="text-xs text-on-surface-variant truncate pl-6">
-                                {c.name && <span className="text-primary font-medium">{c.name}</span>}
-                                {c.name && c.title && <span className="text-outline mx-1">•</span>}
-                                {c.title && <span className="text-outline">{c.title}</span>}
-                              </p>
-                            )}
-                          </div>
-                          {c.email && (
-                            <button className="text-outline hover:text-primary shrink-0 pt-0.5" title="Copy">
-                              <span className="material-symbols-outlined text-[16px]">
-                                {copiedId === `snovio-${idx}` ? "check" : "content_copy"}
-                              </span>
-                            </button>
-                          )}
+                          ))}
                         </div>
-                      ))}
+                      ) : (
+                        <div className="text-xs text-outline italic py-1">No public emails discovered on website.</div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
-                      <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">mark_email_unread</span>
-                      <span className="text-sm text-on-surface-variant font-medium">Snov.io search yielded no personal emails.</span>
-                      <span className="text-xs text-outline mt-1 max-w-sm">Domain query found no personal inboxes or was rate-limited.</span>
+
+                    {/* Phone Numbers */}
+                    <div className="pt-3 border-t border-outline-variant/20">
+                      <div className="text-[10px] font-semibold text-outline uppercase tracking-wider mb-2 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-[14px]">call</span> Phone Numbers
+                        </span>
+                        <span className="text-[10px] text-outline/60 lowercase">click to copy</span>
+                      </div>
+                      {crawlPhones.length > 0 ? (
+                        <div className="flex flex-wrap gap-2.5">
+                          {crawlPhones.map((phone, idx) => (
+                            <div
+                              key={idx}
+                              onClick={() => handleCopy(phone, `crawl-phone-${idx}`)}
+                              className="group flex items-center gap-2 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-3 py-2 rounded-lg cursor-pointer transition-all active:scale-[0.98]"
+                              title="Click to copy phone"
+                            >
+                              <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">phone</span>
+                              <span className="text-sm font-serif text-[#4ade80]">{phone}</span>
+                              <span className="material-symbols-outlined text-outline group-hover:text-primary text-[14px] ml-1 shrink-0">
+                                {copiedId === `crawl-phone-${idx}` ? "check" : "content_copy"}
+                              </span>
+                              {copiedId === `crawl-phone-${idx}` && (
+                                <span className="text-[10px] text-[#4ade80] font-semibold animate-in fade-in">Copied!</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-outline italic py-1">No phone numbers captured.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {contactViewMode === 'crawl' && (snovioList.length > 0 || decisionMakers.length > 0) && (
+                    <div className="mt-4 bg-[#18181b] border border-outline-variant/30 rounded-xl p-3.5 flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <span className="material-symbols-outlined text-purple-400 text-[18px]">person</span>
+                        <p className="text-xs text-primary font-medium">{snovioList.length + decisionMakers.length} Personal / Decision Maker contacts discovered for this lead.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setContactViewMode('personal')}
+                        className="text-xs text-purple-400 hover:text-purple-300 underline font-medium whitespace-nowrap ml-2"
+                      >
+                        View Personal Contacts →
+                      </button>
                     </div>
                   )}
                 </div>
-              </div>
+              )}
 
-              {/* 3. Owner & Decision Makers Container */}
-              <div>
-                <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
-                  <h3 className="text-xs font-semibold text-outline uppercase tracking-wider flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[14px]">manage_search</span> OWNERS & DECISION MAKERS
-                    <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
-                      {decisionMakers.length} {decisionMakers.length === 1 ? "person" : "people"}
-                    </span>
-                  </h3>
-                </div>
-                <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5">
-                  {decisionMakers.length > 0 ? (
-                    <div className="divide-y divide-outline-variant/20">
-                      {decisionMakers.map((dm: any, idx: number) => (
-                        <div key={idx} className="py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-full bg-surface-container-high border border-outline-variant/50 flex items-center justify-center text-xs text-primary font-semibold shrink-0 font-serif">
-                              {dm.name ? dm.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2).toUpperCase() : "DM"}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h4 className="text-sm font-semibold text-primary truncate font-serif">{dm.name || "Unnamed Executive"}</h4>
-                                {dm.source && (
-                                  <span className="text-[9px] bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 uppercase tracking-wider shrink-0">
-                                    {dm.source.includes("proxycurl") ? "Proxycurl" : dm.source.includes("serper") ? "Google Maps" : dm.source}
+              {/* 2. SNOV.IO Personal Emails Container */}
+              {(contactViewMode === 'personal' || contactViewMode === 'all') && (
+                <div>
+                  <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
+                    <h3 className="text-xs font-semibold text-outline uppercase tracking-wider flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[14px]">radar</span> SNOV.IO PERSONAL EMAILS
+                      <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
+                        {snovioList.length} {snovioList.length === 1 ? "email" : "emails"}
+                      </span>
+                    </h3>
+                  </div>
+                  <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5">
+                    {snovioList.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {snovioList.map((c: any, idx: number) => (
+                          <div
+                            key={idx}
+                            onClick={() => c.email && handleCopy(c.email, `snovio-${idx}`)}
+                            className={`flex items-start justify-between gap-3 bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 p-3 rounded-lg transition-all ${c.email ? "cursor-pointer active:scale-[0.98]" : ""}`}
+                            title={c.email ? "Click to copy email" : ""}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className="material-symbols-outlined text-[#4ade80] text-[16px] shrink-0">alternate_email</span>
+                                <span className="text-sm font-serif text-[#4ade80] truncate font-medium break-all">
+                                  {c.email || "No email"}
+                                </span>
+                                {c.verification_status === "verified" && (
+                                  <span className="text-[9px] bg-[#4ade80]/15 text-[#4ade80] border border-[#4ade80]/30 px-1.5 py-0.2 rounded font-semibold uppercase shrink-0">
+                                    Verified
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs text-on-surface-variant truncate mt-0.5">
-                                {dm.title || "Decision Maker / Executive"}
-                              </p>
+                              {(c.name || c.title) && (
+                                <p className="text-xs text-on-surface-variant truncate pl-6">
+                                  {c.name && <span className="text-primary font-medium">{c.name}</span>}
+                                  {c.name && c.title && <span className="text-outline mx-1">•</span>}
+                                  {c.title && <span className="text-outline">{c.title}</span>}
+                                </p>
+                              )}
+                            </div>
+                            {c.email && (
+                              <button className="text-outline hover:text-primary shrink-0 pt-0.5" title="Copy">
+                                <span className="material-symbols-outlined text-[16px]">
+                                  {copiedId === `snovio-${idx}` ? "check" : "content_copy"}
+                                </span>
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
+                        <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">mark_email_unread</span>
+                        <span className="text-sm text-on-surface-variant font-medium">Snov.io search yielded no personal emails.</span>
+                        <span className="text-xs text-outline mt-1 max-w-sm">Domain query found no personal inboxes or was rate-limited.</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Owner & Decision Makers Container */}
+              {(contactViewMode === 'personal' || contactViewMode === 'all') && (
+                <div>
+                  <div className="flex items-center justify-between mb-3 border-b border-outline-variant/20 pb-2">
+                    <h3 className="text-xs font-semibold text-outline uppercase tracking-wider flex items-center gap-2">
+                      <span className="material-symbols-outlined text-[14px]">manage_search</span> OWNERS & DECISION MAKERS
+                      <span className="text-[10px] bg-surface-container px-2 py-0.5 rounded text-outline border border-outline-variant/30 font-sans tracking-normal font-normal">
+                        {decisionMakers.length} {decisionMakers.length === 1 ? "person" : "people"}
+                      </span>
+                    </h3>
+                  </div>
+                  <div className="bg-surface-container-low border border-outline-variant/40 rounded-xl shadow-sm p-5">
+                    {decisionMakers.length > 0 ? (
+                      <div className="divide-y divide-outline-variant/20">
+                        {decisionMakers.map((dm: any, idx: number) => (
+                          <div key={idx} className="py-3.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-full bg-surface-container-high border border-outline-variant/50 flex items-center justify-center text-xs text-primary font-semibold shrink-0 font-serif">
+                                {dm.name ? dm.name.split(" ").map((n: string) => n[0]).join("").substring(0, 2).toUpperCase() : "DM"}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h4 className="text-sm font-semibold text-primary truncate font-serif">{dm.name || "Unnamed Executive"}</h4>
+                                  {dm.source && (
+                                    <span className="text-[9px] bg-surface-container px-1.5 py-0.5 rounded text-outline border border-outline-variant/30 uppercase tracking-wider shrink-0">
+                                      {dm.source.includes("proxycurl") ? "Proxycurl" : dm.source.includes("serper") ? "Google Maps" : dm.source}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-on-surface-variant truncate mt-0.5">
+                                  {dm.title || "Decision Maker / Executive"}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center flex-wrap gap-2 pl-12 sm:pl-0 font-serif">
+                              {dm.email && (
+                                <div
+                                  onClick={() => handleCopy(dm.email, `dm-email-${idx}`)}
+                                  className="flex items-center gap-1 text-xs text-[#4ade80] bg-[#4ade80]/10 border border-[#4ade80]/20 px-2.5 py-1.5 rounded cursor-pointer hover:bg-[#4ade80]/20 transition-colors"
+                                  title="Click to copy email"
+                                >
+                                  <span className="material-symbols-outlined text-[#4ade80] text-[14px]">mail</span>
+                                  <span>{dm.email}</span>
+                                  <span className="material-symbols-outlined text-outline text-[12px]">
+                                    {copiedId === `dm-email-${idx}` ? "check" : "content_copy"}
+                                  </span>
+                                </div>
+                              )}
+                              {dm.phone && (
+                                <div
+                                  onClick={() => handleCopy(dm.phone, `dm-phone-${idx}`)}
+                                  className="flex items-center gap-1 text-xs text-[#4ade80] bg-[#4ade80]/10 border border-[#4ade80]/20 px-2.5 py-1.5 rounded cursor-pointer hover:bg-[#4ade80]/20 transition-colors"
+                                  title="Click to copy phone"
+                                >
+                                  <span className="material-symbols-outlined text-[#4ade80] text-[14px]">phone</span>
+                                  <span className="text-[#4ade80]">{dm.phone}</span>
+                                  <span className="material-symbols-outlined text-outline text-[12px]">
+                                    {copiedId === `dm-phone-${idx}` ? "check" : "content_copy"}
+                                  </span>
+                                </div>
+                              )}
+                              {dm.linkedin_url && (
+                                <a
+                                  href={dm.linkedin_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="flex items-center gap-1 text-xs text-[#0a66c2] hover:text-[#388ee7] bg-[#0a66c2]/10 border border-[#0a66c2]/20 px-2.5 py-1.5 rounded transition-colors"
+                                  title="View LinkedIn Profile"
+                                >
+                                  <span className="material-symbols-outlined text-[14px]">work</span>
+                                  <span>LinkedIn</span>
+                                  <span className="material-symbols-outlined text-[10px]">open_in_new</span>
+                                </a>
+                              )}
+                              {!dm.email && !dm.phone && !dm.linkedin_url && (
+                                <span className="text-xs text-outline italic">Profile found, awaiting direct inbox</span>
+                              )}
                             </div>
                           </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
+                        <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
+                        <span className="text-sm text-on-surface-variant font-medium">Proxycurl search yielded no results.</span>
+                        <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
+                      </div>
+                    )}
+                  </div>
 
-                          <div className="flex items-center flex-wrap gap-2 pl-12 sm:pl-0 font-serif">
-                            {dm.email && (
-                              <div
-                                onClick={() => handleCopy(dm.email, `dm-email-${idx}`)}
-                                className="flex items-center gap-1.5 text-xs bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-2.5 py-1.5 rounded cursor-pointer transition-all active:scale-[0.98]"
-                                title="Click to copy email"
-                              >
-                                <span className="material-symbols-outlined text-[#4ade80] text-[14px]">mail</span>
-                                <span className="text-[#4ade80]">{dm.email}</span>
-                                <span className="material-symbols-outlined text-outline text-[12px]">
-                                  {copiedId === `dm-email-${idx}` ? "check" : "content_copy"}
-                                </span>
-                              </div>
-                            )}
-                            {dm.phone && (
-                              <div
-                                onClick={() => handleCopy(dm.phone, `dm-phone-${idx}`)}
-                                className="flex items-center gap-1.5 text-xs bg-[#1a1919] hover:bg-[#222121] border border-outline-variant/30 hover:border-[#4ade80]/50 px-2.5 py-1.5 rounded cursor-pointer transition-all active:scale-[0.98]"
-                                title="Click to copy phone"
-                              >
-                                <span className="material-symbols-outlined text-[#4ade80] text-[14px]">phone</span>
-                                <span className="text-[#4ade80]">{dm.phone}</span>
-                                <span className="material-symbols-outlined text-outline text-[12px]">
-                                  {copiedId === `dm-phone-${idx}` ? "check" : "content_copy"}
-                                </span>
-                              </div>
-                            )}
-                            {dm.linkedin_url && (
-                              <a
-                                href={dm.linkedin_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="flex items-center gap-1 text-xs text-[#0a66c2] hover:text-[#388ee7] bg-[#0a66c2]/10 border border-[#0a66c2]/20 px-2.5 py-1.5 rounded transition-colors"
-                                title="View LinkedIn Profile"
-                              >
-                                <span className="material-symbols-outlined text-[14px]">work</span>
-                                <span>LinkedIn</span>
-                                <span className="material-symbols-outlined text-[10px]">open_in_new</span>
-                              </a>
-                            )}
-                            {!dm.email && !dm.phone && !dm.linkedin_url && (
-                              <span className="text-xs text-outline italic">Profile found, awaiting direct inbox</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="bg-surface-container/30 border border-outline-variant/20 rounded-lg p-6 flex flex-col items-center justify-center text-center">
-                      <span className="material-symbols-outlined text-outline/50 text-[32px] mb-2">person_off</span>
-                      <span className="text-sm text-on-surface-variant font-medium">Proxycurl search yielded no results.</span>
-                      <span className="text-xs text-outline mt-1 max-w-sm">No matches found or rate limit was reached.</span>
+                  {contactViewMode === 'personal' && (crawlEmails.length > 0 || crawlPhones.length > 0) && (
+                    <div className="mt-4 bg-[#18181b] border border-outline-variant/30 rounded-xl p-3.5 flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <span className="material-symbols-outlined text-[#4ade80] text-[18px]">language</span>
+                        <p className="text-xs text-primary font-medium">{crawlEmails.length} Crawled Website emails and {crawlPhones.length} phone numbers available.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setContactViewMode('crawl')}
+                        className="text-xs text-[#4ade80] hover:text-[#86efac] underline font-medium whitespace-nowrap ml-2"
+                      >
+                        View Crawl Contacts (Default) →
+                      </button>
                     </div>
                   )}
                 </div>
-              </div>
+              )}
             </section>
 
             {/* Section: Outreach Intelligence */}

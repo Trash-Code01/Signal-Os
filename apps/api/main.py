@@ -687,11 +687,55 @@ def _serialize_crm_lead(
 ) -> dict:
     industry = business.industry or (campaign.industry.name if campaign and campaign.industry else "Uncategorized")
     location = ", ".join(part for part in [business.city, business.state_province, business.country] if part)
+
+    crawl_email = None
+    crawl_phone = business.primary_phone
+    personal_email = None
+    personal_phone = None
+    personal_name = None
+    personal_title = None
+
+    for c in contacts:
+        src = (c.get("source") or "").lower()
+        ctype = (c.get("contact_type") or "").lower()
+        c_email = c.get("email")
+        c_phone = c.get("phone")
+        c_name = c.get("name")
+        c_title = c.get("title")
+
+        is_personal = "snovio" in src or "proxycurl" in src or "apollo" in src or ctype == "personal" or (c_name and c_name != "Unknown contact" and ctype != "company")
+
+        if is_personal:
+            if not personal_email and c_email:
+                personal_email = c_email
+            if not personal_phone and c_phone:
+                personal_phone = c_phone
+            if not personal_name and c_name and c_name != "Unknown contact":
+                personal_name = c_name
+                personal_title = c_title
+        else:
+            if not crawl_email and c_email:
+                crawl_email = c_email
+            if not crawl_phone and c_phone:
+                crawl_phone = c_phone
+
+    if not crawl_email:
+        for c in contacts:
+            if c.get("email") and "snovio" not in (c.get("source") or "").lower():
+                crawl_email = c.get("email")
+                break
+
     return {
         "id": business.id,
         "name": business.name,
         "website_url": business.website_url,
         "phone": business.primary_phone,
+        "crawl_email": crawl_email,
+        "crawl_phone": crawl_phone,
+        "personal_email": personal_email,
+        "personal_phone": personal_phone,
+        "personal_name": personal_name,
+        "personal_title": personal_title,
         "industry": industry,
         "city": business.city,
         "state_province": business.state_province,

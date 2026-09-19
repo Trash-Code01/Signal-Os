@@ -76,6 +76,13 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
       new Set(contacts.map((c) => c.linkedin_url).filter(Boolean))
     ).join('; ');
 
+    const crawlEmail = lead.crawl_email || contacts.find((c) => c.email && !c.source?.includes('snovio') && !c.source?.includes('proxycurl'))?.email || '';
+    const crawlPhone = lead.crawl_phone || lead.phone || '';
+    const personalContact = contacts.find((c) => c.source?.includes('snovio') || c.source?.includes('proxycurl') || c.contact_type === 'personal') || {};
+    const personalEmail = lead.personal_email || personalContact.email || '';
+    const personalPhone = lead.personal_phone || personalContact.phone || '';
+    const personalName = lead.personal_name || personalContact.name || '';
+
     return {
       'Lead ID': lead.id,
       'Company Name': lead.name || '',
@@ -89,6 +96,11 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
       'Grade': lead.grade || 'U',
       'Stage': (lead.stage || 'new').toUpperCase(),
       'Campaign': lead.campaign_name || '',
+      'Crawled Website Email': crawlEmail,
+      'Crawled Phone Number': crawlPhone,
+      'Personal Work Email': personalEmail,
+      'Personal Direct Phone': personalPhone,
+      'Decision Maker Name': personalName,
       'Primary Contact Name': primaryContact.name || '',
       'Primary Contact Title': primaryContact.title || '',
       'Primary Contact Email': primaryContact.email || '',
