@@ -155,7 +155,7 @@ export default function LeadDossier() {
     const seen = new Set<string>();
     const list: Array<{ email: string; sourceUrl?: string }> = [];
     contactsList.forEach((c: any) => {
-      if (c.email && !c.source?.includes("snovio") && !c.source?.includes("proxycurl") && !c.source?.includes("apollo")) {
+      if (c.email && !c.source?.includes("snovio") && !c.source?.includes("proxycurl") && !c.source?.includes("apollo") && !c.source?.includes("serper")) {
         const clean = c.email.trim().toLowerCase();
         if (!seen.has(clean)) {
           seen.add(clean);
@@ -209,7 +209,7 @@ export default function LeadDossier() {
     contactsList.forEach((c: any) => {
       const name = (c.name || "").trim();
       const hasValidName = name && name !== "Unknown" && name !== "Unknown contact" && c.contact_type !== "company";
-      const isExecutive = c.source?.includes("proxycurl") || c.source?.includes("apollo") || 
+      const isExecutive = c.source?.includes("proxycurl") || c.source?.includes("apollo") || c.source?.includes("serper") ||
         c.title?.toLowerCase().includes("owner") || c.title?.toLowerCase().includes("founder") || 
         c.title?.toLowerCase().includes("chef") || c.title?.toLowerCase().includes("ceo") || 
         c.title?.toLowerCase().includes("president") || c.title?.toLowerCase().includes("manager") ||

@@ -6,9 +6,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from core.database import Base, SessionLocal
-from core.models import User, Business, Campaign, IndustryConfig, CRMLead, Score, DecisionMaker, CampaignLocation
+from core.models import User, Business, BusinessSource, Campaign, IndustryConfig, CRMLead, Score, DecisionMaker, CampaignLocation
 from core.deduplication import find_existing_business, DeduplicationEngine
-from core.staging_jobs import run_mock_campaign
+from core.staging_jobs import run_mock_campaign, sanitize_legacy_mock_data
 
 
 @pytest.fixture
@@ -99,6 +99,37 @@ def test_find_existing_business_by_name_and_city(db_session):
     assert match2 is None
 
 
+def test_legacy_mock_contacts_are_sanitized(db_session):
+    campaign = Campaign(id=90, name="Legacy mock", target_quantity=1, owner_id=1, settings={})
+    db_session.add(campaign)
+    db_session.add(CampaignLocation(campaign_id=90, city="Delhi", region_state=None, country="India", owner_id=1))
+    db_session.flush()
+    business = Business(
+        campaign_id=90,
+        name="Fake Delhi lead",
+        website_url="https://fakedehli.com",
+        website_domain="fakedehli.com",
+        primary_phone="+1 214-555-0199",
+        city="Delhi",
+        state_province="Texas",
+        country="India",
+        owner_id=1,
+    )
+    db_session.add(business); db_session.flush()
+    db_session.add(BusinessSource(business_id=business.id, source="mock", owner_id=1))
+    db_session.add(DecisionMaker(business_id=business.id, email="contact@fakedehli.com", source="website_crawl", owner_id=1))
+    db_session.commit()
+
+    assert sanitize_legacy_mock_data(db_session.get_bind()) == 1
+    db_session.expire_all()
+    cleaned = db_session.get(Business, business.id)
+    assert cleaned.website_domain.endswith('.test.invalid')
+    assert cleaned.primary_phone is None
+    assert cleaned.state_province is None
+    assert db_session.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).count() == 0
+    assert db_session.get(Campaign, 90).settings['data_mode'] == 'synthetic'
+
+
 def test_consecutive_campaigns_never_repeat_leads(db_session):
     industry = IndustryConfig(id=1, name="Roofing", owner_id=1)
     db_session.add(industry)
@@ -116,7 +147,7 @@ def test_consecutive_campaigns_never_repeat_leads(db_session):
     leads_c1 = db_session.query(Business).filter(Business.campaign_id == 1).all()
     assert len(leads_c1) == 5
     domains_c1 = {b.website_domain for b in leads_c1}
-    phones_c1 = {b.primary_phone for b in leads_c1}
+    phones_c1 = {b.primary_phone for b in leads_c1 if b.primary_phone}
     names_c1 = {b.name for b in leads_c1}
 
     # Create Campaign 2 with the EXACT SAME industry and city
@@ -131,10 +162,102 @@ def test_consecutive_campaigns_never_repeat_leads(db_session):
     leads_c2 = db_session.query(Business).filter(Business.campaign_id == 2).all()
     assert len(leads_c2) == 5
     domains_c2 = {b.website_domain for b in leads_c2}
-    phones_c2 = {b.primary_phone for b in leads_c2}
+    phones_c2 = {b.primary_phone for b in leads_c2 if b.primary_phone}
     names_c2 = {b.name for b in leads_c2}
 
     # Verify ZERO overlap between Campaign 1 and Campaign 2
     assert domains_c1.isdisjoint(domains_c2), f"Overlapping domains found: {domains_c1 & domains_c2}"
     assert phones_c1.isdisjoint(phones_c2), f"Overlapping phones found: {phones_c1 & phones_c2}"
     assert names_c1.isdisjoint(names_c2), f"Overlapping company names found: {names_c1 & names_c2}"
+
+
+@pytest.mark.parametrize("requested_quantity", [1, 37, 100, 300, 500])
+def test_campaign_delivers_exact_requested_quantity(db_session, requested_quantity):
+    industry = IndustryConfig(id=3, name="HVAC", owner_id=1)
+    db_session.add(industry)
+    db_session.commit()
+
+    c3 = Campaign(
+        id=3,
+        name=f"HVAC {requested_quantity} Target",
+        industry_id=3,
+        target_quantity=requested_quantity,
+        owner_id=1,
+    )
+    db_session.add(c3)
+    db_session.add(CampaignLocation(campaign_id=3, city="Austin", region_state="Texas", country="USA", owner_id=1))
+    db_session.commit()
+
+    result = run_mock_campaign(db_session, c3)
+    assert result["status"] == "completed"
+    assert result["discovered"] == requested_quantity
+    assert result["qualified"] == requested_quantity
+
+    leads = db_session.query(Business).filter(Business.campaign_id == 3).all()
+    assert len(leads) == requested_quantity
+    assert len({lead.name for lead in leads}) == requested_quantity
+    assert len({lead.website_domain for lead in leads}) == requested_quantity
+    assert all(lead.website_domain.endswith('.test.invalid') for lead in leads)
+    assert all(lead.primary_phone is None for lead in leads)
+    assert db_session.query(DecisionMaker).filter(DecisionMaker.business_id.in_([b.id for b in leads])).count() == 0
+    # Verify every delivered business has its CRM lead and score.
+    crm_leads = db_session.query(CRMLead).filter(CRMLead.business_id.in_([b.id for b in leads])).all()
+    assert len(crm_leads) == requested_quantity
+    scores = db_session.query(Score).filter(Score.business_id.in_([b.id for b in leads])).all()
+    assert len(scores) == requested_quantity
+
+
+def test_mock_campaign_resume_tops_up_existing_leads(db_session):
+    industry = IndustryConfig(id=4, name="Plumbing", owner_id=1)
+    db_session.add(industry)
+    campaign = Campaign(id=4, name="Resume to target", industry_id=4, target_quantity=20, owner_id=1)
+    db_session.add(campaign)
+    db_session.add(CampaignLocation(campaign_id=4, city="Austin", region_state="Texas", country="USA", owner_id=1))
+    db_session.commit()
+
+    first_result = run_mock_campaign(db_session, campaign)
+    assert first_result["qualified"] == 20
+
+    campaign.target_quantity = 100
+    campaign.status = "processing"
+    db_session.commit()
+    resumed_result = run_mock_campaign(db_session, campaign)
+
+    leads = db_session.query(Business).filter(Business.campaign_id == campaign.id).all()
+    assert resumed_result["status"] == "completed"
+    assert resumed_result["qualified"] == 100
+    assert len(leads) == 100
+    assert len({lead.website_domain for lead in leads}) == 100
+
+
+def test_two_300_lead_campaigns_do_not_repeat_businesses(db_session):
+    industry = IndustryConfig(id=5, name="Solar", owner_id=1)
+    db_session.add(industry)
+    db_session.commit()
+
+    campaign_lead_sets = []
+    for campaign_id in (5, 6):
+        campaign = Campaign(
+            id=campaign_id,
+            name=f"Solar 300 Run {campaign_id}",
+            industry_id=industry.id,
+            target_quantity=300,
+            owner_id=1,
+        )
+        db_session.add(campaign)
+        db_session.add(CampaignLocation(
+            campaign_id=campaign_id,
+            city="Phoenix",
+            region_state="Arizona",
+            country="USA",
+            owner_id=1,
+        ))
+        db_session.commit()
+
+        result = run_mock_campaign(db_session, campaign)
+        assert result["qualified"] == 300
+        leads = db_session.query(Business).filter(Business.campaign_id == campaign_id).all()
+        assert len(leads) == 300
+        campaign_lead_sets.append({(lead.website_domain, lead.primary_phone) for lead in leads})
+
+    assert campaign_lead_sets[0].isdisjoint(campaign_lead_sets[1])

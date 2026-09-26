@@ -18,7 +18,7 @@ import main
 import auth
 import worker
 from core.database import Base, SessionLocal, get_db
-from core.models import User, Business, Campaign, IndustryConfig, CRMLead, Score, DecisionMaker
+from core.models import User, Business, Campaign, CampaignLocation, IndustryConfig, CRMLead, Score, DecisionMaker
 from core.auth import create_access_token
 from core.auth_schema import migrate_auth_schema
 from core.tenancy import migrate_ownership
@@ -90,6 +90,24 @@ def test_viewer_get_requests_do_not_backfill_or_mutate(setup):
         assert db.query(CRMLead).filter(CRMLead.business_id == business_id).first() is None
 
 
+def test_lead_serialization_separates_listing_and_website_contacts():
+    business = Business(name='Delhi Yoga', primary_phone='+91 98765 43210', city='Delhi', country='India')
+    campaign = Campaign(name='Delhi campaign', settings={'data_mode': 'live'})
+    crm_lead = CRMLead(stage='qualified')
+    contacts = [{
+        'name': 'Studio contact',
+        'email': 'hello@delhiyoga.example',
+        'phone': '+91 11 4567 8901',
+        'source': 'website_crawl',
+        'contact_type': 'company',
+    }]
+    serialized = main._serialize_crm_lead(business, None, None, crm_lead, campaign, contacts)
+    assert serialized['listing_phone'] == '+91 98765 43210'
+    assert serialized['crawl_phone'] == '+91 11 4567 8901'
+    assert serialized['crawl_email'] == 'hello@delhiyoga.example'
+    assert serialized['data_mode'] == 'live'
+
+
 def test_account_isolation_every_path(setup):
     client, factory = setup
     a = add_lead(factory, 1, 'ADMIN PRIVATE')
@@ -146,8 +164,19 @@ def test_campaign_ownership_worker_and_live_options(setup):
     with factory() as db:
         db.info['owner_id']=2
         assert db.query(Business).count()==2
-        assert db.query(Campaign).one().status=='completed'
+        campaign = db.query(Campaign).one()
+        assert campaign.status=='completed'
         assert all(b.owner_id==2 for b in db.query(Business).all())
+        campaign.target_quantity = 5
+        campaign.status = 'completed_partial'
+        db.commit()
+    assert client.post(f'/api/campaigns/{cid}/resume', headers=headers(1)).status_code == 404
+    resumed = client.post(f'/api/campaigns/{cid}/resume', headers=headers(2))
+    assert resumed.status_code == 202, resumed.text
+    with factory() as db:
+        db.info['owner_id']=2
+        assert db.query(Business).count() == 5
+        assert db.query(Campaign).one().status == 'completed'
 
 
 def test_campaign_credit_limits_are_enforced(setup):
@@ -155,7 +184,9 @@ def test_campaign_credit_limits_are_enforced(setup):
     base={'name':'Bounded campaign', 'country':'USA', 'cities':['Austin'], 'industry':'roofing', 'target_quantity':2, 'min_quality_score':60}
     too_many={**base, 'cities':[f'City {index}' for index in range(21)]}
     assert client.post('/api/campaigns', headers=headers(2), json=too_many).status_code==422
-    assert client.post('/api/campaigns', headers=headers(2), json={**base, 'target_quantity':101}).status_code==422
+    assert client.post('/api/campaigns', headers=headers(2), json={**base, 'cities':[]}).status_code==422
+    assert main.CampaignCreateRequest(**{**base, 'target_quantity':500}).target_quantity == 500
+    assert client.post('/api/campaigns', headers=headers(2), json={**base, 'target_quantity':501}).status_code==422
     with factory() as db:
         db.info['owner_id']=2
         industry=IndustryConfig(name='Bounded'); db.add(industry); db.flush()
@@ -163,6 +194,89 @@ def test_campaign_credit_limits_are_enforced(setup):
             db.add(Campaign(name=f'Active {index}', industry_id=industry.id, status='processing'))
         db.commit()
     assert client.post('/api/campaigns', headers=headers(2), json=base).status_code==429
+
+
+def test_live_worker_uses_reserve_candidates_to_deliver_target(setup, monkeypatch):
+    _, factory = setup
+    with factory() as db:
+        db.info['owner_id'] = 2
+        industry = IndustryConfig(name='plumbing')
+        db.add(industry); db.flush()
+        campaign = Campaign(name='Live target delivery', industry_id=industry.id, target_quantity=300, min_quality_score=80, status='processing', settings={})
+        db.add(campaign); db.flush()
+        db.add(CampaignLocation(campaign_id=campaign.id, city='Austin', region_state='Texas', country='USA'))
+        db.commit()
+        campaign_id = campaign.id
+
+    class FakeProvider:
+        async def discover(self, query, location, industry, limit=None):
+            return [
+                {
+                    'name': f'Candidate {index}',
+                    'primary_phone': f'+1 512 555 {index:04d}',
+                    'city': 'Austin',
+                    'state_province': 'Texas',
+                    'country': 'USA',
+                    'source_metadata': {'source': 'qa_provider'},
+                }
+                for index in range(limit or 0)
+            ]
+
+    monkeypatch.setattr(worker, 'IS_STAGING', False)
+    monkeypatch.setattr(worker, 'get_discovery_provider', lambda: FakeProvider())
+    result = worker.process_campaign_task(campaign_id)
+
+    assert result['status'] == 'completed'
+    assert result['qualified'] == 300
+    assert result['discovered'] == 300
+    with factory() as db:
+        db.info['owner_id'] = 2
+        assert db.query(Business).filter(Business.campaign_id == campaign_id).count() == 300
+
+
+def test_live_worker_uses_campaign_geography_and_rejects_wrong_country_phone(setup, monkeypatch):
+    _, factory = setup
+    with factory() as db:
+        db.info['owner_id'] = 2
+        industry = IndustryConfig(name='yoga')
+        db.add(industry); db.flush()
+        campaign = Campaign(
+            name='India Delhi yoga',
+            industry_id=industry.id,
+            target_quantity=1,
+            min_quality_score=60,
+            status='processing',
+            settings={'data_mode': 'live'},
+        )
+        db.add(campaign); db.flush()
+        db.add(CampaignLocation(campaign_id=campaign.id, city='Delhi', region_state=None, country='India'))
+        db.commit()
+        campaign_id = campaign.id
+
+    class WrongGeoProvider:
+        async def discover(self, query, location, industry, limit=None):
+            return [{
+                'name': f'Delhi Yoga Candidate {index}',
+                'primary_phone': f'+1 214-555-{1000 + index:04d}',
+                'city': 'Dallas',
+                'state_province': 'Texas',
+                'country': 'USA',
+                'source_metadata': {'source': 'qa_provider'},
+            } for index in range(limit or 0)]
+
+    monkeypatch.setattr(worker, 'IS_STAGING', False)
+    monkeypatch.setattr(worker, 'get_discovery_provider', lambda: WrongGeoProvider())
+    result = worker.process_campaign_task(campaign_id)
+
+    assert result['status'] == 'completed_partial'
+    with factory() as db:
+        db.info['owner_id'] = 2
+        leads = db.query(Business).filter(Business.campaign_id == campaign_id).all()
+        assert leads
+        assert all(lead.city == 'Delhi' for lead in leads)
+        assert all(lead.state_province is None for lead in leads)
+        assert all(lead.country == 'India' for lead in leads)
+        assert all(lead.primary_phone is None for lead in leads)
 
 
 def test_google_verification_invitation_and_revocation(setup, monkeypatch):
@@ -183,7 +297,10 @@ def test_google_verification_invitation_and_revocation(setup, monkeypatch):
     assert client.get('/api/auth/me',headers=h).json()['role']=='admin'
     assert verified[-1]=='test-client.apps.googleusercontent.com'
     claims.update(sub='not-invited',email='outsider@gmail.com')
-    # Uninvited Google account is automatically provisioned with access
+    outsider_res = client.post('/api/auth/google',json={'credential':'ok','nonce':nonce})
+    assert outsider_res.status_code == 403
+    invited = client.post('/api/auth/users', headers=h, json={'email':'outsider@gmail.com','role':'viewer'})
+    assert invited.status_code == 201
     outsider_res = client.post('/api/auth/google',json={'credential':'ok','nonce':nonce})
     assert outsider_res.status_code == 200
     outsider_token = {'Authorization':'Bearer '+outsider_res.json()['access_token']}
@@ -196,26 +313,10 @@ def test_google_verification_invitation_and_revocation(setup, monkeypatch):
     assert client.post('/api/auth/logout',headers=h).status_code==200
     assert client.get('/api/auth/me',headers=h).status_code==401
 
-def test_dev_mock_google_login(setup, monkeypatch):
+def test_password_login_is_disabled(setup):
     client, _ = setup
-    monkeypatch.setattr(auth, 'IS_STAGING', True)
-    nonce = 'm' * 32
-    res = client.post('/api/auth/google', json={'credential': 'dev-mock:devacia.com@gmail.com', 'nonce': nonce})
-    assert res.status_code == 200, res.text
-    assert 'access_token' in res.json()
-    h = {'Authorization': 'Bearer ' + res.json()['access_token']}
-    me = client.get('/api/auth/me', headers=h).json()
-    assert me['email'] == 'devacia.com@gmail.com'
-    assert me['role'] == 'admin'
-
-def test_staging_google_only_password_fallback(setup, monkeypatch):
-    client, _ = setup
-    monkeypatch.setattr(auth, 'IS_STAGING', True)
-    res = client.post('/api/auth/google', json={'credential': 'dev-mock:devuser@gmail.com', 'nonce': 'n'*32})
-    assert res.status_code == 200
     login_res = client.post('/api/auth/login', json={'email': 'devuser@gmail.com', 'password': 'my-password'})
-    assert login_res.status_code == 200
-    assert 'access_token' in login_res.json()
+    assert login_res.status_code == 410
 
 
 def test_cookie_csrf(setup):

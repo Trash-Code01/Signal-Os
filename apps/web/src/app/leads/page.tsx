@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, Suspense } from "react";
 import { useSession } from '@/components/SessionProvider';
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw, PanelLeftClose, PanelLeftOpen, Globe, User, Mail, Phone, Copy, Check } from "lucide-react";
+import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw, PanelLeftClose, PanelLeftOpen, Globe, User, Mail, Phone, Copy, Check, ExternalLink } from "lucide-react";
 import ExportDropdown, { ExportFormat, ExportScope } from "@/components/ExportDropdown";
 import { exportLeads } from "@/lib/exportUtils";
 
@@ -126,7 +126,7 @@ function LeadsPipelineContent() {
         body: JSON.stringify({ ids: selectedIds })
       });
       loadLeads();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.warn("Bulk action error:", (e as any)?.message || e); }
   };
 
   const [loading, setLoading] = useState(true);
@@ -152,11 +152,11 @@ function LeadsPipelineContent() {
   const getLeadContactInfo = (lead: any, mode: 'crawl' | 'personal') => {
     if (mode === 'crawl') {
       const crawlEmail = lead.crawl_email || lead.contacts?.find((c: any) => 
-        c.email && !c.source?.includes('snovio') && !c.source?.includes('proxycurl') && !c.source?.includes('apollo')
+        c.email && !c.source?.includes('snovio') && !c.source?.includes('proxycurl') && !c.source?.includes('apollo') && !c.source?.includes('serper')
       )?.email || (!lead.contacts?.some((c: any) => c.source?.includes('snovio')) ? lead.contacts?.[0]?.email : null);
       
       const crawlPhone = lead.crawl_phone || lead.phone || lead.contacts?.find((c: any) => 
-        c.phone && !c.source?.includes('snovio') && !c.source?.includes('proxycurl')
+        c.phone && !c.source?.includes('snovio') && !c.source?.includes('proxycurl') && !c.source?.includes('serper')
       )?.phone;
 
       return {
@@ -167,8 +167,9 @@ function LeadsPipelineContent() {
       };
     } else {
       const personalContact = lead.contacts?.find((c: any) => 
-        c.source?.includes('snovio') || c.source?.includes('proxycurl') || c.source?.includes('apollo') || c.contact_type === 'personal'
-      ) || lead.contacts?.find((c: any) => c.name && c.name !== 'Unknown contact' && c.contact_type !== 'company');
+        c.source?.includes('snovio') || c.source?.includes('proxycurl') || c.source?.includes('apollo') || c.source?.includes('serper') || c.contact_type === 'personal' || c.contact_type === 'professional'
+      ) || lead.contacts?.find((c: any) => (c.name && c.name !== 'Unknown contact' && c.contact_type !== 'company') || (c.contact_type !== 'company' && (c.email || c.phone)));
+
 
       const personalEmail = lead.personal_email || personalContact?.email || null;
       const personalPhone = lead.personal_phone || personalContact?.phone || personalContact?.mobile || null;
@@ -209,7 +210,9 @@ function LeadsPipelineContent() {
         setLeads(data.leads || []);
         setTotal(data.total || 0);
       }
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.warn("Failed to load leads from backend:", (e as any)?.message || e);
+    }
     finally { setLoading(false); }
   }, [filters, statusTab]);
 
@@ -402,7 +405,18 @@ function LeadsPipelineContent() {
   </td>
   <td className="px-2 py-3.5 cursor-pointer" onClick={() => router.push(`/leads/${lead.id}`)}>
                           <p className="font-semibold text-white group-hover:text-purple-300 transition-colors leading-tight">{lead.name}</p>
-                          {lead.website_url && <p className="text-xs text-zinc-600 truncate max-w-[200px] mt-0.5">{lead.website_url.replace(/^https?:\/\//, "")}</p>}
+                          {lead.website_url && (
+                            <a
+                              href={lead.website_url.startsWith('http') ? lead.website_url : `https://${lead.website_url}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-xs text-zinc-400 hover:text-purple-300 hover:underline inline-flex items-center gap-1 max-w-[220px] truncate mt-0.5 group/link"
+                            >
+                              <span className="truncate">{lead.website_url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}</span>
+                              <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-60 group-hover/link:opacity-100" />
+                            </a>
+                          )}
                         </td>
                         <td className="px-4 py-3.5 text-zinc-400 text-xs capitalize">{lead.industry || ""}</td>
                         <td className="px-4 py-3.5 text-zinc-400 text-xs whitespace-nowrap">{lead.location || ""}</td>

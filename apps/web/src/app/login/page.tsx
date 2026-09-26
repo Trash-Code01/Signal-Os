@@ -1,278 +1,175 @@
 'use client';
+
 import { useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
-import { Terminal, Lock, Mail, ArrowRight, ShieldCheck } from 'lucide-react';
+import { ShieldCheck, Terminal } from 'lucide-react';
 
-type GoogleIdentity = { 
-  accounts: { 
-    id: { 
-      initialize: (options: { client_id: string; nonce: string; callback: (response: { credential: string }) => void }) => void; 
-      renderButton: (element: HTMLElement, options: { theme: string; size: string; text: string; width?: number }) => void 
-    } 
-  } 
+type GoogleIdentity = {
+  accounts: {
+    id: {
+      initialize: (options: {
+        client_id: string;
+        nonce: string;
+        callback: (response: { credential: string }) => void;
+      }) => void;
+      renderButton: (
+        element: HTMLElement,
+        options: { theme: string; size: string; text: string; width: number },
+      ) => void;
+    };
+  };
 };
-declare global { interface Window { google?: GoogleIdentity } }
+
+declare global {
+  interface Window {
+    google?: GoogleIdentity;
+  }
+}
 
 export default function LoginPage() {
-  const googleBtnRef = useRef<HTMLDivElement>(null);
-  const [ready, setReady] = useState(false);
+  const button = useRef<HTMLDivElement>(null);
+  const [scriptReady, setScriptReady] = useState(false);
   const [config, setConfig] = useState<{ client_id: string; nonce: string } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Email/Password states
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [pwLoading, setPwLoading] = useState(false);
-
   useEffect(() => {
     fetch('/api/auth/google', { cache: 'no-store' })
-      .then(async response => {
+      .then(async (response) => {
         const data = await response.json();
-        if (response.ok && data) {
-          setConfig(data);
-        }
+        if (!response.ok) throw new Error(data.detail || 'Sign-in service is unavailable.');
+        if (!data.client_id) throw new Error('Google sign-in is not configured yet. Contact your admin.');
+        setConfig(data);
       })
-      .catch(() => {});
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Sign-in service is unavailable.'));
   }, []);
 
   useEffect(() => {
-    if (!ready || !config?.client_id || !window.google || !googleBtnRef.current) return;
-    try {
-      window.google.accounts.id.initialize({
-        client_id: config.client_id,
-        nonce: config.nonce,
-        callback: async ({ credential }) => {
-          setLoading(true);
-          setError('');
-          try {
-            const response = await fetch('/api/auth/google', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ credential, nonce: config.nonce })
-            });
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.detail || 'Sign-in failed');
-            window.location.replace('/dashboard');
-          } catch (err) {
-            setError(err instanceof Error ? err.message : 'Sign-in failed');
-            setLoading(false);
-          }
+    if (!scriptReady || !config?.client_id || !window.google || !button.current) return;
+    window.google.accounts.id.initialize({
+      client_id: config.client_id,
+      nonce: config.nonce,
+      callback: async ({ credential }) => {
+        setLoading(true);
+        setError('');
+        try {
+          const response = await fetch('/api/auth/google', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential, nonce: config.nonce }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || 'Sign-in failed.');
+          window.location.replace('/dashboard');
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : 'Sign-in failed.');
+          setLoading(false);
         }
-      });
-      googleBtnRef.current.replaceChildren();
-      window.google.accounts.id.renderButton(googleBtnRef.current, {
-        theme: 'outline',
-        size: 'large',
-        text: 'continue_with',
-        width: 340
-      });
-    } catch {
-      // Ignored
-    }
-  }, [ready, config]);
+      },
+    });
+    button.current.replaceChildren();
+    window.google.accounts.id.renderButton(button.current, {
+      theme: 'outline',
+      size: 'large',
+      text: 'continue_with',
+      width: 320,
+    });
+  }, [scriptReady, config]);
 
-  async function handleDevGoogleLogin(targetEmail = 'devacia.com@gmail.com') {
+  const handleDevSignIn = async (email: string = 'devacia.com@gmail.com') => {
+    if (!config?.nonce) return;
     setLoading(true);
     setError('');
     try {
-      let currentNonce = config?.nonce;
-      if (!currentNonce) {
-        const res = await fetch('/api/auth/google', { cache: 'no-store' });
-        const data = await res.json();
-        if (data?.nonce) {
-          currentNonce = data.nonce;
-          setConfig(data);
-        }
-      }
-      if (!currentNonce) throw new Error('Could not establish session nonce. Please refresh.');
-
       const response = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: `dev-mock:${targetEmail}`, nonce: currentNonce })
+        body: JSON.stringify({ credential: `dev-mock:${email}`, nonce: config.nonce }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Sign-in failed');
+      if (!response.ok) throw new Error(data.detail || 'Dev sign-in failed.');
       window.location.replace('/dashboard');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Dev sign-in failed.');
       setLoading(false);
     }
-  }
+  };
 
-  async function handlePasswordLogin(e: React.FormEvent) {
-    e.preventDefault();
-    if (!email || !password) {
-      setError('Please enter both email and password.');
-      return;
-    }
-    setPwLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.detail || 'Incorrect email or password');
-      }
-      window.location.replace('/dashboard');
-    } catch (err: any) {
-      setError(err.message || 'Login failed. Please check credentials.');
-      setPwLoading(false);
-    }
-  }
-
-  function fillDemoAdmin() {
-    setEmail('admin@devacia.com');
-    setPassword('admin123');
-    setError('');
-  }
+  const isStaging = process.env.NEXT_PUBLIC_APP_ENV === 'staging' || process.env.NODE_ENV !== 'production';
 
   return (
-    <div className="min-h-screen bg-[#09090b] flex items-center justify-center p-4">
+    <main className="min-h-screen bg-[#09090b] text-white flex items-center justify-center p-5">
       <Script
         src="https://accounts.google.com/gsi/client"
-        onReady={() => setReady(true)}
-        onError={() => {}}
+        onReady={() => setScriptReady(true)}
+        onError={() => setError('Google sign-in could not be loaded. Check your connection and try again.')}
       />
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#121214] p-8 shadow-2xl">
-        <div className="text-center mb-6">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-violet-600/10 border border-violet-500/20 text-violet-400">
-            <Terminal className="h-6 w-6" />
-          </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Devacia Lead OS</h1>
-          <p className="mt-1.5 text-sm text-zinc-400">Sign in to your lead intelligence workspace</p>
+      <section className="w-full max-w-md rounded-3xl border border-zinc-800 bg-[#121214] p-8 shadow-2xl shadow-black/40">
+        <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-violet-500/20 bg-violet-500/10 text-violet-400">
+          <Terminal className="h-6 w-6" />
+        </div>
+        <div className="text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-violet-300">Devacia Lead OS</p>
+          <h1 className="mt-2 text-2xl font-bold tracking-tight">Your private lead workspace</h1>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">
+            Continue with an invited Google account. Campaigns, leads, and exports stay isolated to that account.
+          </p>
         </div>
 
         {error && (
-          <div role="alert" className="mb-5 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400 text-center">
+          <div role="alert" className="mt-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-center text-sm text-rose-300">
             {error}
           </div>
         )}
 
-        {/* Google Sign In Option */}
-        <div className="space-y-3">
-          <div ref={googleBtnRef} className={`flex justify-center min-h-[44px] ${loading ? 'pointer-events-none opacity-50' : ''}`} />
+        <div className={`mt-6 flex min-h-11 justify-center ${loading ? 'pointer-events-none opacity-50' : ''}`} ref={button} />
+        {loading && <p className="mt-3 text-center text-xs text-zinc-400">Verifying credentials…</p>}
 
-          {/* 1-Click Dev Google Sign In */}
-          <button
-            type="button"
-            onClick={() => handleDevGoogleLogin('devacia.com@gmail.com')}
-            disabled={loading || pwLoading}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-violet-500/30 bg-violet-600/10 hover:bg-violet-600/20 text-violet-300 text-xs font-semibold transition hover:border-violet-500/50 shadow-sm"
-          >
-            <ShieldCheck className="w-4 h-4 text-violet-400 shrink-0" />
-            <span>1-Click Sign-In: <b>devacia.com@gmail.com</b></span>
-          </button>
-
-          <div className="text-center px-2 py-1.5 rounded bg-zinc-900/80 border border-zinc-800/60 text-[11px] text-zinc-400 leading-tight">
-            Encountering Google <span className="text-amber-400 font-mono">origin_mismatch</span> on localhost? Use the 1-Click button above or add localhost to Google Cloud Console.
-          </div>
-
-          {!config?.client_id && (
-            <div className="text-center p-2.5 rounded-lg border border-white/5 bg-white/[0.02] text-xs text-zinc-500">
-              Google OAuth client pending configuration in Google Cloud
-            </div>
-          )}
-          {loading && <p className="text-center text-xs text-zinc-400 animate-pulse">Verifying Google account…</p>}
-        </div>
-
-        {/* Divider */}
-        <div className="relative my-6">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-zinc-800/80"></div>
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-[#121214] px-3 text-zinc-500 font-medium tracking-wider">or email & password</span>
-          </div>
-        </div>
-
-        {/* Email & Password Form */}
-        <form onSubmit={handlePasswordLogin} className="space-y-4">
-          <div>
-            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-1.5 block">Email</label>
+        {isStaging && (
+          <div className="mt-6 space-y-4">
             <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="admin@devacia.com"
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-violet-500/60 transition-colors"
-              />
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-zinc-800" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-[#121214] px-2 text-zinc-500 font-medium tracking-wider">
+                  Or Sandbox Quick-Access
+                </span>
+              </div>
             </div>
-          </div>
 
-          <div>
-            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-1.5 block">Password</label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-violet-500/60 transition-colors"
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={pwLoading || loading}
-            className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2.5 rounded-lg text-sm font-semibold transition flex items-center justify-center gap-2 shadow-lg shadow-violet-900/20 disabled:opacity-50 mt-2"
-          >
-            {pwLoading ? (
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-            ) : (
-              <>
-                Sign In
-                <ArrowRight className="w-4 h-4" />
-              </>
-            )}
-          </button>
-        </form>
-
-        {/* Quick Demo Fill Helper */}
-        <div className="mt-5 pt-4 border-t border-zinc-800/60 flex items-center justify-between text-xs text-zinc-500">
-          <span className="flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-            Quick Fill:
-          </span>
-          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => { setEmail('devacia.com@gmail.com'); setPassword('admin123'); setError(''); }}
-              className="text-violet-400 hover:text-violet-300 transition-colors underline font-mono text-[11px]"
+              onClick={() => handleDevSignIn('devacia.com@gmail.com')}
+              disabled={loading || !config?.nonce}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-violet-600 hover:bg-violet-500 active:bg-violet-700 text-white font-medium py-2.5 px-4 transition-all duration-150 shadow-lg shadow-violet-600/20 disabled:opacity-50 disabled:cursor-not-allowed text-sm cursor-pointer"
             >
-              devacia.com@gmail.com
+              <Terminal className="h-4 w-4" />
+              <span>1-Click Dev Sign-In (Admin)</span>
             </button>
-            <span className="text-zinc-700">|</span>
-            <button
-              type="button"
-              onClick={fillDemoAdmin}
-              className="text-violet-400 hover:text-violet-300 transition-colors underline font-mono text-[11px]"
-            >
-              admin@devacia.com
-            </button>
+
+            <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-3 text-xs text-zinc-400 space-y-1">
+              <p className="font-semibold text-zinc-300">Google OAuth Error 400 (origin_mismatch)?</p>
+              <p className="text-[11px] leading-relaxed text-zinc-500">
+                Google requires exact authorized origins. To test Google Auth locally, add <code className="text-violet-300 bg-zinc-900 px-1 py-0.5 rounded">http://localhost:3001</code> and <code className="text-violet-300 bg-zinc-900 px-1 py-0.5 rounded">http://127.0.0.1:3001</code> to Authorized JavaScript Origins in Google Cloud Console, or use the 1-Click Dev Sign-In above.
+              </p>
+            </div>
           </div>
+        )}
+
+        <div className="mt-6 flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+          <p className="text-xs leading-5 text-zinc-400">
+            Access is invite-only. Admin, Member, and Viewer permissions are enforced by the API.
+          </p>
         </div>
 
         {process.env.NEXT_PUBLIC_APP_ENV === 'staging' && (
-          <div className="mt-4 text-center">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full uppercase tracking-wider">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              Staging Mode Active
-            </span>
-          </div>
+          <p className="mt-5 text-center text-[11px] font-medium text-amber-300">
+            Staging · mock campaigns · no paid discovery calls
+          </p>
         )}
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

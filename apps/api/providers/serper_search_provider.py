@@ -13,7 +13,8 @@ class SerperSearchProvider:
     base_url = "https://google.serper.dev/search"
 
     def __init__(self):
-        self.api_key = "" if IS_STAGING else os.environ.get("SERPER_API_KEY", "").strip()
+        is_live = os.getenv("DISCOVERY_MODE", "").strip().lower() == "live"
+        self.api_key = os.environ.get("SERPER_API_KEY", "").strip() if (not IS_STAGING or is_live) else ""
 
     async def search_decision_makers(self, business_name: str, city: Optional[str] = None, official_domain: Optional[str] = None, include_email: bool = False, include_phone: bool = False) -> List[Dict[str, Any]]:
         if not self.api_key or not business_name:
@@ -32,7 +33,12 @@ class SerperSearchProvider:
         ])
         
         if include_email or include_phone:
-            fields = " ".join(field for enabled, field in [(include_email, "email"), (include_phone, "direct phone mobile")] if enabled)
+            terms = []
+            if include_email:
+                terms.append("email")
+            if include_phone:
+                terms.append("direct phone mobile")
+            fields = " OR ".join(terms)
             queries = [f'"{business_name}" "{location}" (owner OR founder OR CEO) ({fields})']
         contacts: List[Dict[str, Any]] = []
         headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
@@ -64,7 +70,9 @@ class SerperSearchProvider:
                             emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", snippet)
                             contact["email"] = emails[0].lower() if emails else None
                         if include_phone:
-                            phone = re.search(r"(?:direct(?:\s+phone)?|mobile|cell)\s*[:=]?\s*(\+?[\d(][\d\s().-]{7,}\d)", snippet, re.I)
+                            phone = re.search(r"(?:direct(?:\s+phone)?|mobile|cell|phone|tel|call)\s*[:=]?\s*(\+?[\d(][\d\s().-]{7,}\d)", snippet, re.I)
+                            if not phone:
+                                phone = re.search(r"(\+?1[-.\s]?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4})", snippet)
                             candidate = phone.group(1).strip() if phone else None
                             digits = re.sub(r"\D", "", candidate or "")
                             contact["phone"] = candidate if 8 <= len(digits) <= 15 else None
@@ -78,9 +86,15 @@ class SerperSearchProvider:
     @staticmethod
     def _is_valid_person_name(first_name: str, last_name: str, business_name: str) -> bool:
         full_name = f"{first_name} {last_name}".lower()
-        stopwords = {"operated", "since", "details", "company", "roofing", "service", "contact", "about", "home", "llc", "inc", "ltd", "team", "menu", "restaurant", "bar"}
+        stopwords = {
+            "operated", "since", "details", "company", "roofing", "service", "contact",
+            "about", "home", "llc", "inc", "ltd", "team", "menu", "restaurant", "bar",
+            "i'm", "this", "meet", "who", "what", "where", "why", "how", "our", "their",
+            "your", "my", "is", "we", "here"
+        }
         if any(word in full_name.split() for word in stopwords):
             return False
+
             
         biz_tokens = set(business_name.lower().split())
         if all(token in biz_tokens for token in full_name.split()):

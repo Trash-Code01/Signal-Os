@@ -12,8 +12,8 @@ foreach ($port in @(8000, 3001)) {
 }
 $backendScript = Join-Path $apiRoot 'start-backend-staging.ps1'
 $frontendScript = Join-Path $webRoot 'start-web-staging.ps1'
-$backend = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $backendScript + '"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot 'api.out.log') -RedirectStandardError (Join-Path $logRoot 'api.err.log')
-$frontend = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $frontendScript + '"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot 'web.out.log') -RedirectStandardError (Join-Path $logRoot 'web.err.log')
+$backend = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& '$backendScript'") -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot 'api.out.log') -RedirectStandardError (Join-Path $logRoot 'api.err.log')
+$frontend = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& '$frontendScript'") -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot 'web.out.log') -RedirectStandardError (Join-Path $logRoot 'web.err.log')
 @{backend=$backend.Id; frontend=$frontend.Id} | ConvertTo-Json | Set-Content (Join-Path $logRoot 'processes.json')
 Write-Host 'Staging starting at http://127.0.0.1:3001 with an isolated SQLite database and mock jobs.'
 Write-Host 'Google configuration: apps/api/.env.staging.local. Logs: .staging-logs.'

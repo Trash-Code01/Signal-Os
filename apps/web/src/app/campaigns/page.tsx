@@ -1,29 +1,31 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSession } from '@/components/SessionProvider';
 import { useRouter } from 'next/navigation';
 import { FiSearch, FiArchive, FiPlus, FiTrash2, FiRotateCcw, FiAlertTriangle } from 'react-icons/fi';
-import { ChevronRight } from 'lucide-react';
 import ExportDropdown, { ExportFormat, ExportScope } from '@/components/ExportDropdown';
-import { exportCampaigns, exportCampaignsWithLeads } from '@/lib/exportUtils';
+import { exportCampaignsWithLeads, type CampaignExportData, type LeadExportData } from '@/lib/exportUtils';
+import { fetchAllCrmLeads } from '@/lib/fetchAllCrmLeads';
+
+type CampaignRow = CampaignExportData & { created_at: string };
 
 export default function CampaignsPage() {
   const router = useRouter();
   const { user } = useSession();
-  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [statusTab, setStatusTab] = useState("active");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
-  const fetchCampaigns = async () => {
+  const fetchCampaigns = useCallback(async () => {
     setLoading(true);
     try {
       const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/campaigns?status=${statusTab}`);
       if (res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as CampaignRow[];
         setCampaigns(data);
       }
     } catch (e) {
@@ -32,11 +34,11 @@ export default function CampaignsPage() {
       setLoading(false);
       setSelectedIds([]);
     }
-  };
+  }, [statusTab]);
 
   useEffect(() => {
     fetchCampaigns();
-  }, [statusTab]);
+  }, [fetchCampaigns]);
 
   const filteredCampaigns = campaigns.filter(c => 
     c.name.toLowerCase().includes(search.toLowerCase())
@@ -89,23 +91,14 @@ export default function CampaignsPage() {
     if (!targetCampaigns.length) return;
 
     const targetCampaignIds = targetCampaigns.map(c => c.id);
-    let targetLeads: any[] = [];
+    let targetLeads: LeadExportData[] = [];
 
     try {
-      const apiUrl = "";
       if (targetCampaigns.length === 1) {
-        const res = await fetch(`${apiUrl}/api/crm/leads?campaign_id=${targetCampaigns[0].id}&page_size=5000&status=all`);
-        if (res.ok) {
-          const data = await res.json();
-          targetLeads = data.leads || [];
-        }
+        targetLeads = await fetchAllCrmLeads({ campaign_id: targetCampaigns[0].id, status: 'all' });
       } else {
-        const res = await fetch(`${apiUrl}/api/crm/leads?page_size=5000&status=all`);
-        if (res.ok) {
-          const data = await res.json();
-          const allLeads = data.leads || [];
-          targetLeads = allLeads.filter((l: any) => targetCampaignIds.includes(l.campaign_id));
-        }
+        const allLeads = await fetchAllCrmLeads({ status: 'all' });
+        targetLeads = allLeads.filter((lead) => targetCampaignIds.includes(lead.campaign_id || 0));
       }
     } catch (e) {
       console.error("Failed to fetch leads for campaign export:", e);

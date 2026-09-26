@@ -9,17 +9,13 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from core.access import get_current_user
-from core.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_password_hash, verify_password
+from core.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from core.database import get_db
 from core.models import User
 from core.runtime import IS_STAGING
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 Role = Literal["admin", "member", "viewer"]
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
 
 class UserResponse(BaseModel):
     id: int
@@ -37,7 +33,7 @@ class GoogleLogin(BaseModel):
 
 class Invite(BaseModel):
     email: EmailStr
-    role: Role = "admin"
+    role: Role = "viewer"
 
 class UpdateUser(BaseModel):
     role: Role
@@ -60,70 +56,14 @@ def config():
     return {"client_id": os.getenv("GOOGLE_CLIENT_ID", "")}
 
 @router.post("/login")
-def login(req: LoginRequest, db: Session = Depends(get_db)):
-    email = str(req.email).strip().lower()
-    user = db.query(User).filter(func.lower(User.email) == email).first()
-
-    # Bootstrap default admin if logging in with default credentials and user does not exist
-    if not user and email == "admin@devacia.com" and req.password == "admin123":
-        user = User(
-            email=email,
-            hashed_password=get_password_hash("admin123"),
-            name="Devacia Administrator",
-            role="admin",
-            is_active=True
-        )
-        db.add(user)
-        commit(db)
-        db.refresh(user)
-
-    # Auto-register any new email/password account so other accounts have full access to APIs & pipeline
-    if not user and len(req.password) >= 4:
-        user = User(
-            email=email,
-            hashed_password=get_password_hash(req.password),
-            name=email.split("@")[0].replace(".", " ").replace("_", " ").title(),
-            role="admin",
-            is_active=True
-        )
-        db.add(user)
-        commit(db)
-        db.refresh(user)
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-
-    if user and user.hashed_password == "!google-only" and IS_STAGING and len(req.password) >= 4:
-        user.hashed_password = get_password_hash(req.password)
-        commit(db)
-        db.refresh(user)
-
-    if not user.hashed_password or not verify_password(req.password, user.hashed_password):
-        if user.hashed_password == "!google-only":
-            raise HTTPException(status_code=400, detail="This account is set up with Google Sign-In. Please click Continue with Google.")
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-
-    if user.is_active is False:
-        raise HTTPException(status_code=403, detail="Your account has been disabled.")
-
-    token = create_access_token(
-        {"sub": str(user.id), "ver": user.session_version},
-        timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "email": user.email,
-        "role": user.role,
-        "name": user.name
-    }
+def password_login_disabled():
+    raise HTTPException(410, "Password login is disabled. Continue with Google.")
 
 @router.post("/google")
 def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
     client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-    if not client_id and not (IS_STAGING and body.credential.startswith("dev-mock:")):
+    if not client_id:
         raise HTTPException(503, "Google sign-in is not configured yet. Contact your admin.")
-
     claims = None
     if IS_STAGING and body.credential.startswith("dev-mock:"):
         mock_email = body.credential.split(":", 1)[1].strip().lower()
@@ -154,16 +94,14 @@ def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
         user = db.query(User).filter(func.lower(User.email) == email).first()
         if user and user.google_sub:
             raise HTTPException(403, "This invitation is linked to another Google account.")
-        # Auto-create user with full admin access so other Google accounts have complete pipeline access
+        bootstrap = os.getenv("GOOGLE_ADMIN_EMAIL", "").strip().lower() or ("devacia.com@gmail.com" if IS_STAGING else "")
         if not user:
-            user = User(
-                email=email,
-                hashed_password="!google-only",
-                role="admin",
-                name=str(claims.get("name", ""))[:255] or email.split("@")[0],
-                is_active=True
-            )
+            if email != bootstrap:
+                raise HTTPException(403, "Ask your admin to invite this Google email first.")
+            user = User(email=email, hashed_password="!google-only", role="admin")
             db.add(user)
+        if email == bootstrap and not user.google_sub:
+            user.role = "admin"
         if user.is_active is False:
             raise HTTPException(403, "Your account has been disabled.")
         user.google_sub = claims["sub"]

@@ -7,8 +7,9 @@ from core.provider_health import report_provider_state
 
 class SnovioProvider(EmailProvider):
     def __init__(self, db_session=None):
-        self.client_id = "" if IS_STAGING else os.environ.get('SNOVIO_CLIENT_ID', '').strip()
-        self.client_secret = "" if IS_STAGING else os.environ.get('SNOVIO_CLIENT_SECRET', '').strip()
+        is_live = os.getenv("DISCOVERY_MODE", "").strip().lower() == "live"
+        self.client_id = os.environ.get('SNOVIO_CLIENT_ID', '').strip() if (not IS_STAGING or is_live) else ""
+        self.client_secret = os.environ.get('SNOVIO_CLIENT_SECRET', '').strip() if (not IS_STAGING or is_live) else ""
         self.base_url = "https://api.snov.io"
         self._token = None
 

@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional, Set, Tuple
 
 from core.safe_http import PublicAddressResolver, fetch_public_http_text
 from core.runtime import IS_STAGING
+from core.lead_quality import clean_email
 
 class WebsiteIntelligenceEngine:
     """
@@ -35,29 +36,39 @@ class WebsiteIntelligenceEngine:
             
         base_domain = (urllib.parse.urlsplit(start_url).hostname or "").rstrip(".").lower()
             
-        if IS_STAGING or base_domain.endswith(".example") or base_domain.endswith(".invalid") or "mock" in base_domain or "apexroofingtx" in base_domain or "texasstarroofing" in base_domain:
-            mock_clean = base_domain.replace(".com", "").replace("-", " ").replace(".", " ").title()
+        is_fixture_domain = (
+            base_domain.endswith(".example")
+            or base_domain.endswith(".invalid")
+            or "mock" in base_domain
+            or "apexroofingtx" in base_domain
+            or "texasstarroofing" in base_domain
+        )
+        is_live_mode = os.getenv("DISCOVERY_MODE", "").strip().lower() == "live"
+        if (IS_STAGING and not is_live_mode) or is_fixture_domain:
+            # Staging and reserved fixture domains must never invent crawl
+            # results or contact details for a URL that was not fetched.
             return {
-                "is_live": True,
-                "has_ssl": True,
-                "pages_checked": [start_url, f"{start_url}/contact"],
+                "is_live": False,
+                "has_ssl": start_url.startswith("https"),
+                "pages_checked": [],
                 "page_details": [],
-                "emails": {f"contact@{base_domain}", f"info@{base_domain}"},
-                "phones": {"+1 214-555-0199"},
-                "social_profiles": {"linkedin": "https://linkedin.com/company/sample"},
-                "public_people": [{"name": f"{mock_clean} Team", "title": "Customer Support", "email": f"contact@{base_domain}"}],
-                "technology_stack": {"WordPress", "Elementor", "Google Analytics"},
-                "booking_detected": True,
+                "emails": [],
+                "phones": [],
+                "social_profiles": [],
+                "public_people": [],
+                "technology_stack": [],
+                "booking_detected": False,
                 "ecommerce_detected": False,
-                "mobile_responsive": True,
-                "responsive_evidence": ["Viewport meta tag detected"],
-                "contact_form": True,
-                "quote_form": True,
-                "phone_cta": True,
+                "mobile_responsive": False,
+                "responsive_evidence": [],
+                "contact_form": False,
+                "quote_form": False,
+                "phone_cta": False,
                 "sticky_cta": False,
                 "live_chat": False,
-                "evidence": ["Contact page active", "Quote form detected"],
-                "desktop_screenshot_base64": None
+                "evidence": [],
+                "desktop_screenshot_base64": None,
+                "crawl_disabled": True,
             }
 
         findings = {
@@ -253,31 +264,43 @@ class WebsiteIntelligenceEngine:
                 findings["technology_stack"].add(bk.title())
                 
         # Regex extraction
-        email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
-        # Expanded phone regex to catch standard formats
-        phone_pattern = r'(?:(?:\+?1\s*(?:[.-]\s*)?)?(?:\(\s*([2-9]1[02-9]|[2-9][02-8]1|[2-9][02-8][02-9])\s*\)|([2-9]1[02-9]|[2-9][02-8]1|[2-9][02-8][02-9]))\s*(?:[.-]\s*)?)?([2-9]1[02-9]|[2-9][02-9]1|[2-9][02-9]{2})\s*(?:[.-]\s*)?([0-9]{4})(?:\s*(?:#|x\.?|ext\.?|extension)\s*(\d+))?'
+        email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+'
+        # Country-neutral candidate extraction. Country validation happens in
+        # the worker before a contact is admitted into the CRM.
+        phone_pattern = r'(?<![\w])(?:\+|00)?\d[\d\s().-]{6,}\d(?![\w])'
         
         found_emails = re.findall(email_pattern, text)
-        findings["emails"].update([e for e in found_emails if not any(x in e.lower() for x in ['.png', '.jpg', 'sentry', 'wix'])])
+        for candidate in found_emails:
+            email = clean_email(candidate)
+            if email and not any(x in email for x in ['.png', '.jpg', 'sentry', 'wix']):
+                findings["emails"].add(email)
         
-        # Simple phone collection (could be noisy but good for AI)
+        phone_context = re.compile(r"phone|call|mobile|tel(?:ephone)?|contact|whatsapp|mob\.?", re.IGNORECASE)
         for p in re.finditer(phone_pattern, text):
             match = p.group(0).strip()
-            if len(re.sub(r'\D', '', match)) >= 10:
+            digits = re.sub(r'\D', '', match)
+            context = text[max(0, p.start() - 28):min(len(text), p.end() + 12)]
+            has_formatting = bool(re.search(r"[+(). -]", match))
+            if re.fullmatch(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", match):
+                continue
+            if 8 <= len(digits) <= 15 and (has_formatting or phone_context.search(context)):
                 findings["phones"].add(match)
 
         # Links (Mailto, Tel, Social)
         for a in soup.find_all('a', href=True):
-            href = a['href'].lower()
-            if href.startswith('mailto:'):
-                findings["emails"].add(href.replace('mailto:', '').split('?')[0])
-            elif href.startswith('tel:'):
-                findings["phones"].add(href.replace('tel:', ''))
+            href = a['href'].strip()
+            href_lower = href.lower()
+            if href_lower.startswith('mailto:'):
+                email = clean_email(href)
+                if email:
+                    findings["emails"].add(email)
+            elif href_lower.startswith('tel:'):
+                findings["phones"].add(href[4:].split('?', 1)[0].strip())
                 findings["phone_cta"] = True
             
             # Socials
             for platform in ['linkedin', 'facebook', 'twitter', 'instagram', 'youtube']:
-                if f"{platform}.com" in href:
+                if f"{platform}.com" in href_lower:
                     findings["social_profiles"].setdefault(platform, a['href'])
 
         # Team/People Extraction (Heuristics)
@@ -362,7 +385,7 @@ class WebsiteIntelligenceEngine:
         for node in nodes:
             node_type = node.get("@type") or ""
             types = {str(item).lower() for item in (node_type if isinstance(node_type, list) else [node_type])}
-            email = (node.get("email") or "").strip().lower()
+            email = clean_email(node.get("email"))
             phone = (node.get("telephone") or "").strip()
             if email:
                 findings["emails"].add(email)

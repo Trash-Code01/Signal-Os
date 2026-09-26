@@ -19,6 +19,13 @@ export interface LeadExportData {
   outreach_angle?: string | null;
   created_at?: string | null;
   phone?: string | null;
+  listing_phone?: string | null;
+  crawl_email?: string | null;
+  crawl_phone?: string | null;
+  personal_email?: string | null;
+  personal_phone?: string | null;
+  personal_name?: string | null;
+  data_mode?: 'live' | 'synthetic' | string | null;
   contacts?: Array<{
     name?: string | null;
     title?: string | null;
@@ -26,8 +33,12 @@ export interface LeadExportData {
     phone?: string | null;
     linkedin_url?: string | null;
     source?: string | null;
+    source_url?: string | null;
+    verification_status?: string | null;
+    confidence?: number | null;
+    contact_type?: string | null;
   }>;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface CampaignExportData {
@@ -39,7 +50,8 @@ export interface CampaignExportData {
   country?: string | null;
   industry?: string | null;
   created_at?: string | null;
-  [key: string]: any;
+  data_mode?: 'live' | 'synthetic' | string | null;
+  [key: string]: unknown;
 }
 
 /**
@@ -69,22 +81,25 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
     ).join('; ');
 
     const allPhones = Array.from(
-      new Set([lead.phone, ...contacts.map((c) => c.phone)].filter(Boolean))
+      new Set([lead.listing_phone || lead.phone, ...contacts.map((c) => c.phone)].filter(Boolean))
     ).join('; ');
 
     const allLinkedIn = Array.from(
       new Set(contacts.map((c) => c.linkedin_url).filter(Boolean))
     ).join('; ');
 
-    const crawlEmail = lead.crawl_email || contacts.find((c) => c.email && !c.source?.includes('snovio') && !c.source?.includes('proxycurl'))?.email || '';
-    const crawlPhone = lead.crawl_phone || lead.phone || '';
-    const personalContact = contacts.find((c) => c.source?.includes('snovio') || c.source?.includes('proxycurl') || c.contact_type === 'personal') || {};
+    const websiteContacts = contacts.filter((c) => ['website_crawl', 'website_structured_data'].includes((c.source || '').toLowerCase()));
+    const crawlEmail = lead.crawl_email || websiteContacts.find((c) => c.email)?.email || '';
+    const crawlPhone = lead.crawl_phone || websiteContacts.find((c) => c.phone)?.phone || '';
+    const listingPhone = lead.listing_phone || lead.phone || '';
+    const personalContact = contacts.find((c) => c.source?.includes('snovio') || c.source?.includes('proxycurl') || c.source?.includes('apollo') || c.source?.includes('serper') || c.contact_type === 'personal' || c.contact_type === 'professional') || {};
     const personalEmail = lead.personal_email || personalContact.email || '';
     const personalPhone = lead.personal_phone || personalContact.phone || '';
     const personalName = lead.personal_name || personalContact.name || '';
 
     return {
       'Lead ID': lead.id,
+      'Data Mode': (lead.data_mode || 'live').toUpperCase(),
       'Company Name': lead.name || '',
       'Website': lead.website_url || '',
       'Industry': lead.industry || '',
@@ -97,7 +112,8 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
       'Stage': (lead.stage || 'new').toUpperCase(),
       'Campaign': lead.campaign_name || '',
       'Crawled Website Email': crawlEmail,
-      'Crawled Phone Number': crawlPhone,
+      'Website Phone': crawlPhone,
+      'Business Listing Phone': listingPhone,
       'Personal Work Email': personalEmail,
       'Personal Direct Phone': personalPhone,
       'Decision Maker Name': personalName,
@@ -107,6 +123,8 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
       'Primary Contact Phone': primaryContact.phone || '',
       'Primary Contact LinkedIn': primaryContact.linkedin_url || '',
       'Contact Source': primaryContact.source || '',
+      'Contact Verification': primaryContact.verification_status || '',
+      'Contact Evidence URL': primaryContact.source_url || '',
       'All Emails': allEmails,
       'All Phone Numbers': allPhones,
       'LinkedIn Profiles': allLinkedIn,
@@ -124,6 +142,7 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
 export function formatCampaignsForExport(campaigns: CampaignExportData[]) {
   return campaigns.map((c) => ({
     'Campaign ID': c.id,
+    'Data Mode': (c.data_mode || (process.env.NEXT_PUBLIC_APP_ENV === 'staging' ? 'synthetic' : 'live')).toUpperCase(),
     'Campaign Name': c.name || '',
     'Status': (c.status || '').toUpperCase(),
     'Target Leads': c.target || 0,
@@ -138,7 +157,7 @@ export function formatCampaignsForExport(campaigns: CampaignExportData[]) {
 /**
  * Auto-calculate column widths for XLSX worksheet
  */
-function calculateColWidths(rows: Record<string, any>[]) {
+function calculateColWidths(rows: Record<string, unknown>[]) {
   if (!rows.length) return [];
   const keys = Object.keys(rows[0]);
   return keys.map((key) => {

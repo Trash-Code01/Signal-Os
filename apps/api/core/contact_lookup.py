@@ -1,3 +1,5 @@
+import os
+from urllib.parse import urlparse
 from core.runtime import IS_STAGING
 from providers.snovio_provider import SnovioProvider
 from providers.serper_search_provider import SerperSearchProvider
@@ -8,15 +10,22 @@ async def lookup_optional_contacts(business, personal_email_enabled=False, phone
     Snov supplies personal work emails. Public search may supply a phone;
     the current Proxycurl executive endpoint supplies neither phone nor email.
     """
-    if IS_STAGING or not (personal_email_enabled or phone_enabled):
+    is_live = os.getenv("DISCOVERY_MODE", "").strip().lower() == "live"
+    if (IS_STAGING and not is_live) or not (personal_email_enabled or phone_enabled):
         return []
-    from urllib.parse import urlparse
     domain = urlparse(business.website_url or "").hostname
     contacts = []
     if personal_email_enabled and domain:
-        contacts.extend(await SnovioProvider().find_emails(domain, business.name))
-    if phone_enabled or (personal_email_enabled and not domain):
-        contacts.extend(await SerperSearchProvider().search_decision_makers(business.name, business.city, domain, include_email=personal_email_enabled, include_phone=phone_enabled))
+        snov_contacts = await SnovioProvider().find_emails(domain, business.name)
+        contacts.extend(snov_contacts)
+    if phone_enabled or (personal_email_enabled and not contacts):
+        contacts.extend(await SerperSearchProvider().search_decision_makers(
+            business.name,
+            business.city,
+            domain,
+            include_email=personal_email_enabled,
+            include_phone=phone_enabled,
+        ))
     for contact in contacts:
         if not personal_email_enabled:
             contact["email"] = None
@@ -24,3 +33,4 @@ async def lookup_optional_contacts(business, personal_email_enabled=False, phone
             contact["phone"] = None
             contact["mobile"] = None
     return contacts
+

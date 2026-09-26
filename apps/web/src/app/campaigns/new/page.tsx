@@ -41,8 +41,8 @@ export default function NewCampaignPage() {
   const [form, setForm] = useState({
     name: '',
     country: 'USA',
-    state: 'Texas',
-    cities: 'Dallas',
+    state: '',
+    cities: '',
     industry: 'roofing',
     sub_industry: '',
     raw_target: 10,
@@ -58,12 +58,25 @@ export default function NewCampaignPage() {
     setLoading(true);
     setError('');
 
+    const requestedTarget = Number(form.raw_target);
+    if (!Number.isInteger(requestedTarget) || requestedTarget < 1 || requestedTarget > 500) {
+      setError('Qualified lead target must be a whole number between 1 and 500.');
+      setLoading(false);
+      return;
+    }
+
     const parsedCities = form.cities
       .split(',')
       .map(c => c.trim())
       .filter(Boolean);
 
-    const targetCities = parsedCities.length > 0 ? parsedCities : ['Dallas'];
+    if (!form.country.trim() || parsedCities.length === 0) {
+      setError('Choose a country and add at least one target city. State / province is optional.');
+      setLoading(false);
+      return;
+    }
+
+    const targetCities = parsedCities;
     const campaignName =
       form.name.trim() ||
       `${form.country} ${targetCities.join(', ')} ${selectedIndustry?.label || form.industry}`;
@@ -75,11 +88,11 @@ export default function NewCampaignPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: campaignName,
-          country: form.country || 'USA',
+          country: form.country,
           state_province: form.state.trim() || undefined,
           cities: targetCities,
           industry: form.industry,
-          target_quantity: Math.max(1, Math.min(100, Number(form.raw_target) || 10)),
+          target_quantity: requestedTarget,
           min_quality_score: Math.max(0, Math.min(100, Number(form.min_score) || 60)),
           personal_email_enabled: Boolean(options.personal_email_enabled),
           phone_enabled: Boolean(options.phone_enabled),
@@ -94,7 +107,11 @@ export default function NewCampaignPage() {
         if (typeof data.detail === 'string') {
           errorMsg = data.detail;
         } else if (Array.isArray(data.detail)) {
-          errorMsg = data.detail.map((e: any) => `${e.loc?.slice(-1)[0] || 'field'}: ${e.msg}`).join(', ');
+          errorMsg = data.detail
+            .map((issue: { loc?: Array<string | number>; msg?: string }) =>
+              `${issue.loc?.slice(-1)[0] || 'field'}: ${issue.msg || 'Invalid value'}`,
+            )
+            .join(', ');
         }
         setError(errorMsg);
       }
@@ -111,6 +128,11 @@ export default function NewCampaignPage() {
   return (
     <div className="p-4 md:p-10 max-w-4xl pb-24 md:pb-10 mx-auto">
       {error && <p role="alert" className="mb-4 text-red-400 bg-red-950/40 border border-red-800/50 p-3 rounded-xl text-sm">{error}</p>}
+      {process.env.NEXT_PUBLIC_APP_ENV === 'staging' && (
+        <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          <strong>Staging test run:</strong> campaigns create synthetic workflow records only. No real businesses, websites, emails, or phone numbers are scraped. Run production for live lead research.
+        </div>
+      )}
       {/* Header */}
       <div className="mb-8 md:mb-10">
         <div className="hidden md:flex items-center gap-2 text-zinc-500 text-sm mb-4">
@@ -174,7 +196,7 @@ export default function NewCampaignPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">State / Province</label>
+                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">State / Province <span className="normal-case text-zinc-600">(optional)</span></label>
                 <input
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors"
                   placeholder="e.g. Texas"
@@ -277,9 +299,9 @@ export default function NewCampaignPage() {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Raw Businesses to Discover</label>
-                <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.raw_target} onChange={e => setForm({ ...form, raw_target: +e.target.value })} />
-                <p className="text-xs text-zinc-600 mt-2">Total businesses to discover before qualification</p>
+                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Qualified Lead Target</label>
+                <input type="number" min="1" max="500" step="1" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.raw_target} onChange={e => setForm({ ...form, raw_target: +e.target.value })} />
+                <p className="text-xs text-zinc-600 mt-2">1–500 qualified leads. The pipeline discovers reserve candidates to cover duplicates and rejections.</p>
               </div>
               <div>
                 <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Minimum Qualification Score</label>
@@ -340,7 +362,7 @@ export default function NewCampaignPage() {
                 <span className="text-white text-right md:text-left truncate">{form.cities || 'Dallas'}, {form.state || 'Texas'}</span>
                 <span className="text-zinc-500">Industry</span>
                 <span className="text-white text-right md:text-left truncate">{selectedIndustry?.label} {form.sub_industry ? `(${form.sub_industry})` : ''}</span>
-                <span className="text-zinc-500">Raw target</span>
+                <span className="text-zinc-500">Qualified target</span>
                 <span className="text-white text-right md:text-left">{form.raw_target.toLocaleString()}</span>
                 <span className="text-zinc-500">Min score</span>
                 <span className="text-white text-right md:text-left">{form.min_score}/100</span>

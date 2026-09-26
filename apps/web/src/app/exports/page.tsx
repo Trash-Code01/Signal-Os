@@ -2,30 +2,27 @@
 
 import { useState, useEffect } from "react";
 import { Download, FileSpreadsheet, FileText, Code2, Check, Loader2, Database, Rocket } from "lucide-react";
-import { exportLeads, exportCampaigns, exportCampaignsWithLeads } from "@/lib/exportUtils";
+import { exportLeads, exportCampaignsWithLeads, type LeadExportData, type CampaignExportData } from "@/lib/exportUtils";
+import { fetchAllCrmLeads } from "@/lib/fetchAllCrmLeads";
 
 export default function ExportsPage() {
   const [exporting, setExporting] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [leads, setLeads] = useState<any[]>([]);
-  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [leads, setLeads] = useState<LeadExportData[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignExportData[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
       try {
-        const apiUrl = "";
-        const [leadsRes, campaignsRes] = await Promise.all([
-          fetch(`${apiUrl}/api/crm/leads?page_size=5000&status=active`),
-          fetch(`${apiUrl}/api/campaigns?status=active`),
+        const [allLeads, campaignsRes] = await Promise.all([
+          fetchAllCrmLeads({ status: 'active' }),
+          fetch(`/api/campaigns?status=active`),
         ]);
 
-        if (leadsRes.ok) {
-          const leadsData = await leadsRes.json();
-          setLeads(leadsData.leads || []);
-        }
+        setLeads(allLeads);
         if (campaignsRes.ok) {
-          const campaignsData = await campaignsRes.json();
+          const campaignsData = (await campaignsRes.json()) as CampaignExportData[];
           setCampaigns(campaignsData || []);
         }
       } catch (err) {

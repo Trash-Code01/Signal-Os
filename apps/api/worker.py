@@ -13,6 +13,7 @@ from sqlalchemy import or_
 
 from core.database import SessionLocal
 from core.deduplication import DeduplicationEngine
+from core.lead_quality import clean_phone_for_country, clean_website_url
 from core.models import (
     AIAnalysis,
     Business,
@@ -94,17 +95,24 @@ def _page_type(url: str) -> str:
 
 def _set_business_status(db, business, status: str):
     business.status = status
-    crm = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
-    if not crm:
-        crm = CRMLead(business_id=business.id, source="campaign")
-        db.add(crm)
-    if status == "qualified":
-        crm.stage = "qualified"
-    elif status in ["needs_research", "needs_official_website", "needs_contact_enrichment", "researching"]:
-        crm.stage = "needs_review"
-    elif status in ["rejected_unreachable", "below_quality_threshold"]:
-        crm.stage = "archived"
-    db.flush()
+    db.info["system_access"] = True
+    try:
+        crm = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
+        if not crm:
+            crm = CRMLead(business_id=business.id, source="campaign", owner_id=business.owner_id)
+            db.add(crm)
+        elif business.owner_id is not None and crm.owner_id != business.owner_id:
+            crm.owner_id = business.owner_id
+        if status == "qualified":
+            crm.stage = "qualified"
+        elif status in ["needs_research", "needs_official_website", "needs_contact_enrichment", "researching"]:
+            crm.stage = "needs_review"
+        elif status in ["rejected_unreachable", "below_quality_threshold"]:
+            crm.stage = "archived"
+        db.flush()
+    finally:
+        db.info.pop("system_access", None)
+
 
 def _existing_business(db, data: Dict[str, Any]) -> Optional[Business]:
     from core.deduplication import find_existing_business
@@ -465,8 +473,8 @@ def _qualify_no_website_business(db, business: Business) -> int:
 
 @celery_app.task
 def enrich_lead_contacts_task(business_id: int, personal_email_enabled: bool = False, phone_enabled: bool = False):
-    """Refresh public contacts and only the requested paid contact lookups."""
-    if IS_STAGING:
+    is_live = os.getenv("DISCOVERY_MODE", "").strip().lower() == "live"
+    if IS_STAGING and not is_live:
         return {"status": "completed", "contacts_added": 0, "mode": "mock"}
     db = SessionLocal()
     try:
@@ -572,7 +580,7 @@ def process_campaign_task(campaign_id: int):
         if not campaign:
             return {"status": "failed", "reason": "Campaign not found"}
 
-        if IS_STAGING:
+        if IS_STAGING and os.getenv("DISCOVERY_MODE", "").strip().lower() != "live":
             from core.staging_jobs import run_mock_campaign
             return run_mock_campaign(db, campaign)
 
@@ -654,8 +662,8 @@ def process_campaign_task(campaign_id: int):
         )
         provider = get_discovery_provider()
         discovery_needed = max(0, target_quantity - len(resumable_businesses))
-        # Oversample candidate pool so skipping duplicates and dead sites still delivers target_quantity
-        fetch_limit = min(100, max(discovery_needed * 3, 20)) if discovery_needed else 0
+        # Oversample candidate pool up to twice the remaining target (bounded at 1,000)
+        fetch_limit = min(1000, max(discovery_needed * 2, 20)) if discovery_needed else 0
         per_location_limit = max(1, math.ceil(fetch_limit / len(locations))) if fetch_limit else 0
         raw_businesses: List[Dict[str, Any]] = []
         for location in locations:
@@ -664,18 +672,21 @@ def process_campaign_task(campaign_id: int):
             remaining = fetch_limit - len(raw_businesses)
             if remaining <= 0:
                 break
-            raw_businesses.extend(asyncio.run(provider.discover(
+            batch = asyncio.run(provider.discover(
                 query=industry_name,
                 location=_location_label(location),
                 industry=industry_name,
                 limit=min(per_location_limit, remaining),
-            )))
+            ))
+            for item in batch:
+                item["_campaign_location"] = location
+            raw_businesses.extend(batch)
 
         dedupe = DeduplicationEngine()
         unique_businesses = dedupe.deduplicate(raw_businesses)
         saved_businesses: List[Business] = list(resumable_businesses)
         for raw in unique_businesses:
-            if len(saved_businesses) >= target_quantity:
+            if len(saved_businesses) >= fetch_limit:
                 break
             if not raw.get("name"):
                 continue
@@ -688,21 +699,26 @@ def process_campaign_task(campaign_id: int):
                 # Never re-appropriate or repeat an already discovered lead in a new campaign
                 print(f"Skipping previously gathered lead '{raw.get('name')}' (already in Campaign {existing.campaign_id}) to prevent duplicates.")
                 continue
+            loc = raw.get("_campaign_location") or (locations[0] if locations else None)
+            loc_country = loc.country if loc and loc.country else raw.get("country")
+            loc_state = loc.region_state if loc else raw.get("state_province")
+            loc_city = loc.city if loc and loc.city else raw.get("city")
+            primary_phone = clean_phone_for_country(raw.get("primary_phone"), loc_country)
             business = Business(
                 campaign_id=campaign_id,
                 name=raw["name"].strip(),
                 normalized_name=raw["name"].strip().lower(),
                 industry=industry_name,
-                country=raw.get("country"),
-                state_province=raw.get("state_province"),
-                city=raw.get("city"),
+                country=loc_country,
+                state_province=loc_state,
+                city=loc_city,
                 postal_code=raw.get("postal_code"),
                 address=raw.get("address"),
                 latitude=raw.get("latitude"),
                 longitude=raw.get("longitude"),
-                primary_phone=raw.get("primary_phone"),
-                website_url=raw.get("website_url"),
-                website_domain=_domain(raw.get("website_url")),
+                primary_phone=primary_phone,
+                website_url=clean_website_url(raw.get("website_url")),
+                website_domain=_domain(clean_website_url(raw.get("website_url"))),
                 google_place_id=str(raw.get("google_place_id")) if raw.get("google_place_id") else None,
                 rating=raw.get("rating"),
                 review_count=raw.get("review_count"),
@@ -728,9 +744,12 @@ def process_campaign_task(campaign_id: int):
         enriched_count = 0
 
         for business in saved_businesses:
+            if qualified_count >= target_quantity:
+                break
             if not business.website_url:
                 enriched_count += _qualify_no_website_business(db, business)
-                qualified_count += 1
+                if business.status == "qualified":
+                    qualified_count += 1
                 continue
 
             try:
@@ -743,7 +762,8 @@ def process_campaign_task(campaign_id: int):
                     # it as a no-website lead in this same run instead of
                     # re-queuing it and silently losing the contact work.
                     enriched_count += _qualify_no_website_business(db, business)
-                    qualified_count += 1
+                    if business.status == "qualified":
+                        qualified_count += 1
                     continue
 
                 audit = asyncio.run(asyncio.wait_for(crawler.audit_website(business.website_url), timeout=240.0))
@@ -759,6 +779,14 @@ def process_campaign_task(campaign_id: int):
                 _set_business_status(db, business, "rejected_unreachable")
                 db.commit()
                 continue
+
+            final_url = next(iter(audit.get("pages_checked") or []), None)
+            if final_url:
+                cleaned_final = clean_website_url(final_url)
+                if cleaned_final and (not business.website_url or _domain(cleaned_final) != _domain(business.website_url)):
+                    business.website_url = cleaned_final
+                    business.website_domain = _domain(cleaned_final)
+                    db.commit()
 
             public_emails = sorted({email.lower().strip() for email in audit.get("emails") or [] if email})
             _save_public_website_contacts(db, business, audit)
@@ -794,18 +822,16 @@ def process_campaign_task(campaign_id: int):
             for person in public_people:
                 _save_contact(db, business.id, person)
 
-            domain = _domain(business.website_url)
-            if domain:
-                provider_contacts: List[Dict[str, Any]] = []
-                
-                db.refresh(campaign)
-                options = campaign.settings or {}
-                provider_contacts.extend(asyncio.run(lookup_optional_contacts(
-                    business, options.get("personal_email_enabled", False), options.get("phone_enabled", False)
-                )))
-                for contact in provider_contacts:
-                    enriched_count += int(_save_contact(db, business.id, contact))
-                db.commit()
+            db.refresh(campaign)
+            options = campaign.settings or {}
+            provider_contacts: List[Dict[str, Any]] = []
+            provider_contacts.extend(asyncio.run(lookup_optional_contacts(
+                business, options.get("personal_email_enabled", False), options.get("phone_enabled", False)
+            )))
+            for contact in provider_contacts:
+                enriched_count += int(_save_contact(db, business.id, contact))
+            db.commit()
+
 
             diagnosis = asyncio.run(ai_sdr.analyze(evidence, industry_config))
             if not diagnosis:
@@ -859,32 +885,52 @@ def process_campaign_task(campaign_id: int):
                 activity_body = "Qualified from live discovery, website research, AI analysis, and contact enrichment."
 
             _set_business_status(db, business, final_status)
-            crm_lead = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
-            if not crm_lead:
-                db.add(CRMLead(business_id=business.id, stage=stage, source="campaign"))
             
             db.add(CRMActivity(
+
                 business_id=business.id,
                 activity_type=stage,
                 body=activity_body,
                 created_by="Lead Intelligence",
             ))
             db.commit()
-            qualified_count += 1
+            if final_status == "qualified":
+                qualified_count += 1
 
-        campaign.status = "completed"
-        job.status = "completed"
+        # Remove unused reserve candidates still in researching state
+        unreached_businesses = (
+            db.query(Business)
+            .filter(Business.campaign_id == campaign_id, Business.status == "researching")
+            .all()
+        )
+        for u in unreached_businesses:
+            db.query(BusinessSource).filter(BusinessSource.business_id == u.id).delete()
+            db.delete(u)
+        db.commit()
+
+        total_qualified = (
+            db.query(Business)
+            .filter(Business.campaign_id == campaign_id, Business.status == "qualified")
+            .count()
+        )
+        total_delivered = (
+            db.query(Business)
+            .filter(Business.campaign_id == campaign_id)
+            .count()
+        )
+        campaign.status = "completed" if total_qualified >= target_quantity else "completed_partial"
+        job.status = campaign.status
         job.completed_at = datetime.now(timezone.utc)
         job.metrics = {
-            "discovered": len(raw_businesses),
+            "discovered": total_delivered,
             "deduplicated": len(unique_businesses),
-            "saved": len(saved_businesses),
+            "saved": total_delivered,
             "audited": audited_count,
             "enriched_contacts": enriched_count,
-            "qualified": qualified_count,
+            "qualified": total_qualified,
         }
         db.commit()
-        return {"status": "success", **job.metrics}
+        return {"status": campaign.status, **job.metrics}
     except Exception as exc:
         print(f"Campaign {campaign_id} failed: {exc}")
         db.rollback()

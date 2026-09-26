@@ -35,6 +35,11 @@ def startup_db_migrations():
     migrate_ownership(engine)
     if engine.dialect.name == "sqlite":
         Base.metadata.create_all(engine)
+        if IS_STAGING:
+            from core.staging_jobs import sanitize_legacy_mock_data
+            sanitized = sanitize_legacy_mock_data(engine)
+            if sanitized:
+                print(f"Staging data quality: sanitized {sanitized} legacy synthetic leads.")
         return
     try:
         with engine.connect() as conn:
@@ -343,7 +348,8 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
 
     # Stage statuses are independent; each reflects its own data and campaign state.
     discovery_status = (
-        "done" if (discovered >= total_target or (discovered > 0 and (websites > 0 or is_terminal)))
+        "done" if discovered >= total_target
+        else "partial" if is_terminal and discovered > 0
         else "running" if is_running
         else "pending"
     )
@@ -374,19 +380,49 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
         else "pending"
     )
 
+    job_run = db.query(JobRun).filter(JobRun.campaign_id == campaign_id).order_by(JobRun.id.desc()).first()
+    elapsed_seconds = 0
+    now_utc = datetime.now(timezone.utc)
+    if job_run and job_run.started_at:
+        end_time = job_run.completed_at if is_terminal and job_run.completed_at else (now_utc if is_running else (campaign.updated_at or campaign.created_at or now_utc))
+        try:
+            # Handle tz-aware vs naive differences if any
+            t_start = job_run.started_at if job_run.started_at.tzinfo else job_run.started_at.replace(tzinfo=timezone.utc)
+            t_end = end_time if end_time.tzinfo else end_time.replace(tzinfo=timezone.utc)
+            elapsed_seconds = max(0, int((t_end - t_start).total_seconds()))
+        except Exception:
+            elapsed_seconds = 0
+    elif campaign.created_at:
+        try:
+            t_start = campaign.created_at if campaign.created_at.tzinfo else campaign.created_at.replace(tzinfo=timezone.utc)
+            t_end = (campaign.updated_at or now_utc) if is_terminal else now_utc
+            if not t_end.tzinfo:
+                t_end = t_end.replace(tzinfo=timezone.utc)
+            elapsed_seconds = max(0, int((t_end - t_start).total_seconds()))
+        except Exception:
+            elapsed_seconds = 0
+
+    elapsed_str = f"{elapsed_seconds // 60}m {elapsed_seconds % 60}s"
+
     stages = [
-        {"key": "discovery",   "label": "Business Discovery & Deduplication", "status": discovery_status,   "count": min(discovered, total_target) if is_terminal else discovered,   "total": total_target},
-        {"key": "crawler",     "label": "Website Crawl & UX Audit",           "status": crawler_status,     "count": min(websites, discovered) if discovered > 0 else websites,     "total": discovered if discovered > 0 else total_target},
-        {"key": "enrichment",  "label": f"Contact Enrichment ({enriched} found)" if enriched > 0 else "Contact Enrichment", "status": enrichment_status,  "count": enriched_businesses if enriched_businesses > 0 else (1 if enriched > 0 else 0), "total": discovered if discovered > 0 else total_target},
-        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": websites if websites > 0 else (discovered if discovered > 0 else total_target)},
+        {"key": "discovery",   "label": "Business Discovery & Deduplication", "status": discovery_status,   "count": discovered,   "total": max(total_target, discovered)},
+        {"key": "crawler",     "label": "Website Crawl & UX Audit",           "status": crawler_status,     "count": websites,     "total": discovered if discovered > 0 else total_target},
+        {"key": "enrichment",  "label": f"Contact Enrichment ({enriched} found)" if enriched > 0 else "Contact Enrichment", "status": enrichment_status,  "count": enriched_businesses if enriched_businesses > 0 else min(enriched, discovered), "total": discovered if discovered > 0 else total_target},
+        {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": discovered if discovered > 0 else total_target},
     ]
     
+    yield_pct = min(100, round((qualified / total_target) * 100)) if total_target > 0 else 100
+    shortfall = max(0, total_target - qualified)
+
     return {
         "status": campaign.status,
         "terminal": is_terminal,
         "campaign_id": campaign.id,
+        "data_mode": (campaign.settings or {}).get("data_mode") or ("synthetic" if IS_STAGING else "live"),
         "contact_options": {"personal_email_enabled": bool((campaign.settings or {}).get("personal_email_enabled", False)), "phone_enabled": bool((campaign.settings or {}).get("phone_enabled", False))},
         "name": campaign.name,
+        "elapsed": elapsed_str,
+        "elapsed_seconds": elapsed_seconds,
         "stats": {
             "discovered": discovered,
             "qualified": qualified,
@@ -395,8 +431,15 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
             "needs_review": needs_review,
             "rejected": rejected,
             "target": total_target,
+            "yield_pct": yield_pct,
+            "shortfall": shortfall,
+            "target_reached": shortfall == 0,
         },
-        "summary": f"{qualified} qualified / {total_target} target, {needs_review} need review, {rejected} rejected.",
+        "summary": (
+            f"Target reached: {qualified} qualified leads delivered."
+            if shortfall == 0
+            else f"{qualified} of {total_target} qualified leads delivered; {shortfall} still needed, {needs_review} need review, {rejected} rejected."
+        ),
         "stages": stages
     }
 
@@ -421,6 +464,52 @@ def update_campaign_contacts(campaign_id: int, options: CampaignContactOptions, 
     }
 
 
+def _dispatch_task(task_func, *args, **kwargs):
+    is_live = os.getenv("DISCOVERY_MODE", "").strip().lower() == "live"
+    if is_live and IS_STAGING:
+        import threading
+        class DummyTask:
+            id = f"thread-{args[0] if args else 'task'}"
+        thread = threading.Thread(target=task_func, args=args, kwargs=kwargs, daemon=True)
+        thread.start()
+        return DummyTask()
+    return task_func.apply_async(args=list(args), kwargs=kwargs, queue="devacia_queue")
+
+
+@app.post("/api/campaigns/{campaign_id}/resume", status_code=202)
+def resume_campaign(campaign_id: int, db: Session = Depends(get_db)):
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id, Campaign.deleted_at.is_(None)).first()
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    if campaign.status in {"pending", "processing", "running"}:
+        raise HTTPException(409, "Campaign is already running")
+
+    qualified = db.query(Business.id).filter(
+        Business.campaign_id == campaign_id,
+        Business.deleted_at.is_(None),
+        Business.status == "qualified",
+    ).count()
+    remaining = max(0, int(campaign.target_quantity or 0) - qualified)
+    if remaining == 0:
+        campaign.status = "completed"
+        db.commit()
+        return {"status": "completed", "campaign_id": campaign.id, "remaining": 0}
+
+    active_campaigns = db.query(Campaign.id).filter(
+        Campaign.id != campaign.id,
+        Campaign.status.in_(("pending", "processing", "running")),
+    ).count()
+    if active_campaigns >= 3:
+        raise HTTPException(429, "Finish an active campaign before resuming this one")
+
+    campaign.status = "processing"
+    db.commit()
+    from worker import process_campaign_task
+    task = _dispatch_task(process_campaign_task, campaign.id)
+    return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id, "remaining": remaining}
+
+
+
 CampaignText = Annotated[str, Field(min_length=1, max_length=120)]
 
 
@@ -431,7 +520,7 @@ class CampaignCreateRequest(BaseModel):
     state_province: Optional[str] = Field(default=None, max_length=120)
     cities: List[str] = Field(min_length=1, max_length=20)
     industry: CampaignText
-    target_quantity: int = Field(ge=1, le=100)
+    target_quantity: int = Field(ge=1, le=500)
     min_quality_score: int = Field(ge=0, le=100)
     personal_email_enabled: bool | None = None
     phone_enabled: bool | None = None
@@ -451,7 +540,7 @@ class CampaignCreateRequest(BaseModel):
         elif isinstance(v, list):
             v = [str(c).strip() for c in v if str(c).strip()]
         if not v:
-            v = ["Dallas"]
+            raise ValueError("Add at least one target city")
         return v
 @app.get("/api/sync-sequences")
 def sync_sequences(db: Session = Depends(get_db)):
@@ -481,7 +570,12 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
             min_quality_score=req.min_quality_score,
             status="processing",
             owner_id=user.id,
-            settings={"created_by": user.id, "personal_email_enabled": user.personal_email_enabled if req.personal_email_enabled is None else req.personal_email_enabled, "phone_enabled": user.phone_enabled if req.phone_enabled is None else req.phone_enabled},
+            settings={
+                "created_by": user.id,
+                "data_mode": "live" if (not IS_STAGING or os.getenv("DISCOVERY_MODE", "").strip().lower() == "live") else "synthetic",
+                "personal_email_enabled": user.personal_email_enabled if req.personal_email_enabled is None else req.personal_email_enabled,
+                "phone_enabled": user.phone_enabled if req.phone_enabled is None else req.phone_enabled,
+            },
         )
         db.add(campaign)
         db.commit()
@@ -502,8 +596,9 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
     
         # Trigger worker
         from worker import process_campaign_task
-        task = process_campaign_task.apply_async(args=[campaign.id], queue='devacia_queue')
+        task = _dispatch_task(process_campaign_task, campaign.id)
         return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id}
+
     except HTTPException:
         raise
     except Exception:
@@ -709,7 +804,7 @@ def _serialize_crm_lead(
     location = ", ".join(part for part in [business.city, business.state_province, business.country] if part)
 
     crawl_email = None
-    crawl_phone = business.primary_phone
+    crawl_phone = None
     personal_email = None
     personal_phone = None
     personal_name = None
@@ -734,22 +829,27 @@ def _serialize_crm_lead(
                 personal_name = c_name
                 personal_title = c_title
         else:
-            if not crawl_email and c_email:
+            is_website_source = src in {"website_crawl", "website_structured_data"}
+            if is_website_source and not crawl_email and c_email:
                 crawl_email = c_email
-            if not crawl_phone and c_phone:
+            if is_website_source and not crawl_phone and c_phone:
                 crawl_phone = c_phone
 
     if not crawl_email:
         for c in contacts:
-            if c.get("email") and "snovio" not in (c.get("source") or "").lower():
+            if c.get("email") and (c.get("source") or "").lower() in {"website_crawl", "website_structured_data"}:
                 crawl_email = c.get("email")
                 break
+
+    campaign_settings = (campaign.settings or {}) if campaign else {}
+    data_mode = campaign_settings.get("data_mode") or ("synthetic" if IS_STAGING else "live")
 
     return {
         "id": business.id,
         "name": business.name,
         "website_url": business.website_url,
         "phone": business.primary_phone,
+        "listing_phone": business.primary_phone,
         "crawl_email": crawl_email,
         "crawl_phone": crawl_phone,
         "personal_email": personal_email,
@@ -767,6 +867,7 @@ def _serialize_crm_lead(
         "source": crm_lead.source,
         "campaign_id": campaign.id if campaign else None,
         "campaign_name": campaign.name if campaign else "Imported / manual",
+        "data_mode": data_mode,
         "commercial_score": score.commercial_score if score else None,
         "data_confidence": score.data_confidence if score else None,
         "grade": score.grade if score else None,
@@ -1295,8 +1396,10 @@ def get_all_campaigns(status: str = "active", db: Session = Depends(get_db)):
             "status": c.status, 
             "target": c.target_quantity, 
             "created_at": c.created_at.isoformat() if c.created_at else None,
-            "country": loc.country if loc else "USA", 
-            "city": loc.city if loc else "Dallas", 
+            "country": loc.country if loc else None,
+            "city": loc.city if loc else None,
+            "state_province": loc.region_state if loc else None,
+            "data_mode": (c.settings or {}).get("data_mode") or ("synthetic" if IS_STAGING else "live"),
             "industry": c.industry.name if c.industry else ""
         })
     return result
@@ -1480,8 +1583,15 @@ class ContactLookupRequest(BaseModel):
 def enrich_crm_lead_contacts(lead_id: int, options: ContactLookupRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Queue a safe refresh of Apollo decision-maker and public social data."""
     _get_crm_lead_or_404(lead_id, db)
-    task = enrich_lead_contacts_task.apply_async(args=[lead_id], kwargs={"personal_email_enabled": user.personal_email_enabled if options.personal_email_enabled is None else options.personal_email_enabled, "phone_enabled": user.phone_enabled if options.phone_enabled is None else options.phone_enabled}, queue='devacia_queue')
+    task = _dispatch_task(
+        enrich_lead_contacts_task,
+        lead_id,
+        personal_email_enabled=user.personal_email_enabled if options.personal_email_enabled is None else options.personal_email_enabled,
+        phone_enabled=user.phone_enabled if options.phone_enabled is None else options.phone_enabled,
+    )
+
     return {"status": "queued", "task_id": task.id, "message": "Contact research queued with your selected lookup options."}
+
 
 @app.post("/api/leads/{lead_id}/export")
 def export_single_lead(lead_id: int, db: Session = Depends(get_db)):

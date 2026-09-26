@@ -1,9 +1,12 @@
-﻿import os
+import os
 import aiohttp
 import asyncio
+import re
+import urllib.parse
 from typing import List, Dict, Any, Optional
 from core.providers import BusinessDiscoveryProvider
 from core.provider_health import report_provider_state
+from core.lead_quality import canonical_country, clean_phone_for_country, clean_website_url
 
 # Domains that are NEVER a valid local business website — always skip these
 JUNK_WEBSITE_DOMAINS = {
@@ -22,11 +25,23 @@ def _is_junk_website(url) -> bool:
     """Return True if the URL is a directory, social, Wikipedia, or chain HQ page."""
     if not url:
         return False
-    url_lower = url.lower()
+    parsed = urllib.parse.urlsplit(url if "://" in url else f"https://{url}")
+    hostname = (parsed.hostname or "").rstrip(".").lower()
     for domain in JUNK_WEBSITE_DOMAINS:
-        if domain in url_lower:
+        if hostname == domain or hostname.endswith(f".{domain}"):
             return True
     return False
+
+
+def _parse_target_location(location: str) -> tuple[Optional[str], Optional[str], str]:
+    """Parse the campaign location label, not a locale-specific street address."""
+    parts = [part.strip() for part in (location or "").split(",") if part.strip()]
+    if not parts:
+        return None, None, ""
+    country = canonical_country(parts[-1])
+    if country in {"USA", "Canada"} and len(parts) >= 3:
+        return ", ".join(parts[:-2]), parts[-2], country
+    return ", ".join(parts[:-1]) or None, None, country
 
 
 class SerperDiscoveryProvider(BusinessDiscoveryProvider):
@@ -37,20 +52,35 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         return _is_junk_website(link)
 
     def _is_official_business_website(self, result: dict, business_name: str) -> bool:
-        link = result.get("link", "").lower()
+        link = result.get("link", "").strip()
         if not link or self._is_directory_or_social(link):
             return False
-        title = result.get("title", "").lower()
-        snippet = result.get("snippet", "").lower()
-        name_lower = business_name.lower().replace("llc", "").replace("inc", "").strip()
-        stopwords = {"the", "a", "an", "and", "of", "inc", "llc", "co", "company"}
-        name_parts = [p for p in name_lower.split() if p not in stopwords]
-        if not name_parts:
+        hostname = (
+            urllib.parse.urlsplit(link if "://" in link else f"https://{link}").hostname or ""
+        ).lower().removeprefix("www.")
+        compact_host = re.sub(r"[^a-z0-9]", "", hostname.split(".")[0])
+        normalized_name = re.sub(r"[^a-z0-9]+", " ", business_name.lower()).strip()
+        compact_name = normalized_name.replace(" ", "")
+        all_tokens = [token for token in normalized_name.split() if len(token) >= 3]
+        generic = {
+            "the", "and", "company", "services", "solutions", "group", "studio",
+            "centre", "center", "clinic", "official", "private", "limited", "ltd",
+            "llc", "inc", "pvt", "yoga", "fitness", "premier", "elite", "apex",
+        }
+        distinctive_tokens = [token for token in all_tokens if token not in generic]
+        if not all_tokens:
             return False
-        primary_name = name_parts[0]
-        if primary_name in title or primary_name in snippet or primary_name in link:
+        title = re.sub(r"[^a-z0-9]+", " ", (result.get("title") or "").lower())
+        snippet = re.sub(r"[^a-z0-9]+", " ", (result.get("snippet") or "").lower())
+        result_text = f" {title} {snippet} "
+
+        if len(compact_name) >= 5 and compact_name in compact_host:
             return True
-        return False
+        if distinctive_tokens and any(token in compact_host for token in distinctive_tokens):
+            return any(token in result_text for token in distinctive_tokens)
+        matched = sum(token in result_text for token in all_tokens)
+        required = 1 if len(all_tokens) == 1 else 2
+        return matched >= required and any(token in compact_host for token in all_tokens)
 
     async def _fetch_website(self, session: aiohttp.ClientSession, business: dict):
         """Fallback to Serper organic search to find the website if Google Maps did not provide one."""
@@ -68,21 +98,6 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
             print(f"Error fetching website for {business.get('name')}: {e}")
         return None
 
-    def _infer_country(self, location: str) -> str:
-        """Infer country label from the location string passed to discover()."""
-        loc_lower = location.lower()
-        if "australia" in loc_lower:
-            return "Australia"
-        if "united kingdom" in loc_lower or " uk" in loc_lower:
-            return "UK"
-        if "canada" in loc_lower:
-            return "Canada"
-        if "india" in loc_lower:
-            return "India"
-        if "new zealand" in loc_lower:
-            return "New Zealand"
-        return "USA"
-
     async def discover(self, query: str, location: str, industry: str, limit=None) -> List[Dict[str, Any]]:
         print(f"Serper discovering: {query} in {location} for {industry}")
 
@@ -91,8 +106,10 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
             report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing.")
             return []
 
-        # Infer the country from the location string so businesses are tagged correctly
-        inferred_country = self._infer_country(location)
+        target_city, target_state, target_country = _parse_target_location(location)
+        if not target_city or not target_country:
+            report_provider_state("serper", "invalid_request", "Campaign city and country are required.")
+            return []
 
         url = "https://google.serper.dev/places"
         headers = {
@@ -104,65 +121,97 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
 
         raw_businesses = []
         places = []
+        target_limit = max(1, limit or 100)
+        # Larger campaigns need more than the first ten result pages. Stop at
+        # 50 pages, the requested quantity, or the first empty/repeated page.
+        max_pages = min(50, (target_limit + 9) // 10)
+        seen_cids = set()
+
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
-                payload = {
-                    "q": search_query,
-                    "num": min(limit or 100, 100)
-                }
+                for page in range(1, max_pages + 1):
+                    if len(places) >= target_limit:
+                        break
+                    payload = {
+                        "q": search_query,
+                        "page": page,
+                    }
+                    data = None
+                    for attempt in range(2):
+                        async with session.post(url, json=payload) as response:
+                            data = await response.json()
 
-                for attempt in range(2):
-                    async with session.post(url, json=payload) as response:
-                        data = await response.json()
+                            if response.status != 200:
+                                print(f"Serper error {response.status}: {data}")
+                                state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
+                                report_provider_state("serper", state, f"Business discovery failed ({response.status}).", response.status)
+                                if not places:
+                                    return []
+                                break
 
-                        if response.status != 200:
-                            print(f"Serper error {response.status}: {data}")
-                            state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
-                            report_provider_state("serper", state, f"Business discovery failed ({response.status}).", response.status)
-                            return []
+                            page_places = data.get("places", [])
+                            if page_places:
+                                report_provider_state("serper", "active", "Business discovery in progress.", response.status)
+                                break
 
-                        places = data.get("places", [])
-                        if places:
-                            report_provider_state("serper", "active", "Business discovery completed.", response.status)
+                            if attempt == 0:
+                                await asyncio.sleep(1)
+
+                    page_places = (data or {}).get("places", []) if data else []
+                    if not page_places:
+                        break
+
+                    new_added = 0
+                    for p in page_places:
+                        cid = p.get("placeId") or p.get("cid") or p.get("title")
+                        if cid and cid in seen_cids:
+                            continue
+                        if cid:
+                            seen_cids.add(cid)
+                        places.append(p)
+                        new_added += 1
+                        if len(places) >= target_limit:
                             break
 
-                        if attempt == 0:
-                            print(f"Serper returned 0 places for '{search_query}'. Retrying in 2s...")
-                            await asyncio.sleep(2)
+                    if new_added == 0:
+                        break
 
                 for place in places:
                     address_str = place.get("address", "")
-                    city, state, zip_code = None, None, None
-                    if address_str and "," in address_str:
-                        parts = address_str.split(",")
-                        if len(parts) >= 2:
-                            city = parts[-2].strip()
-                            state_zip = parts[-1].strip().split(" ")
-                            if len(state_zip) >= 2:
-                                state = state_zip[0]
-                                zip_code = state_zip[1]
+                    place_identifier = place.get("placeId") or place.get("cid")
+                    source_url = place.get("link") or (
+                        f"https://www.google.com/maps?cid={place.get('cid')}" if place.get("cid") else None
+                    )
+                    zip_code = None
+                    if target_country == "India":
+                        pin_match = re.search(r"\b[1-9]\d{5}\b", address_str)
+                        zip_code = pin_match.group(0) if pin_match else None
+                    elif target_country in {"USA", "Canada"}:
+                        postal_match = re.search(r"\b\d{5}(?:-\d{4})?\b", address_str)
+                        zip_code = postal_match.group(0) if postal_match else None
 
-                    website = place.get("website")
-                    # Clear out junk websites — Wikipedia, chain HQ pages, social media
-                    if _is_junk_website(website):
-                        website = None
+                    website = clean_website_url(place.get("website"))
 
                     raw_businesses.append({
                         "name": place.get("title"),
                         "website_url": website,
-                        "primary_phone": place.get("phoneNumber"),
+                        "primary_phone": clean_phone_for_country(place.get("phoneNumber"), target_country),
                         "address": address_str,
-                        "city": city,
-                        "state_province": state,
-                        "country": inferred_country,   # FIXED: was hardcoded to "US"
+                        "city": target_city,
+                        "state_province": target_state,
+                        "country": target_country,
                         "postal_code": zip_code,
                         "latitude": place.get("latitude"),
                         "longitude": place.get("longitude"),
-                        "google_place_id": place.get("cid"),
+                        "google_place_id": place_identifier,
                         "rating": place.get("rating"),
                         "review_count": place.get("ratingCount"),
-                        "source_url": f"https://www.google.com/maps/place/?q=place_id:{place.get('cid')}",
-                        "source_metadata": {"source": "serper_places", "rank_group": place.get("position")}
+                        "source_url": source_url,
+                        "source_metadata": {
+                            "source": "serper_places",
+                            "rank_group": place.get("position"),
+                            "website_source": "google_business_profile" if website else None,
+                        }
                     })
 
                 # Fallback website fetching for businesses with no website
@@ -176,8 +225,11 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                 if tasks:
                     print(f"Fetching missing websites for {len(tasks)} businesses...")
                     results = await asyncio.gather(*tasks)
-                    for idx, website in zip(missing_indices, results):
-                        raw_businesses[idx]["website_url"] = website
+                    for idx, fetched_website in zip(missing_indices, results):
+                        cleaned = clean_website_url(fetched_website)
+                        raw_businesses[idx]["website_url"] = cleaned
+                        if cleaned:
+                            raw_businesses[idx]["source_metadata"]["website_source"] = "verified_organic_match"
 
         except Exception as e:
             print(f"Serper discovery error: {e}")
