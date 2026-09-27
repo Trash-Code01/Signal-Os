@@ -1,17 +1,25 @@
 import { NextResponse } from 'next/server';
 
-// Lightweight ping endpoint — called every 13 minutes by the frontend keepalive.
-// It pings the backend's /api/health route to prevent Render from sleeping it.
 export async function GET() {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  let backendStatus = null;
+  let errorMsg = null;
+
   try {
     const res = await fetch(`${apiUrl}/api/health`, {
       method: 'GET',
-      signal: AbortSignal.timeout(10_000), // 10s timeout
+      signal: AbortSignal.timeout(6000),
     });
-    return NextResponse.json({ ok: true, status: res.status }, { status: 200 });
-  } catch {
-    // Never propagate errors — this is a silent keepalive
-    return NextResponse.json({ ok: false }, { status: 200 });
+    backendStatus = res.status;
+  } catch (err: any) {
+    errorMsg = err?.message || 'timeout/connection error';
   }
+
+  return NextResponse.json({
+    ok: backendStatus === 200,
+    apiUrl,
+    backendStatus,
+    error: errorMsg,
+    nodeEnv: process.env.NODE_ENV,
+  });
 }

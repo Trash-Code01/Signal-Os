@@ -85,11 +85,12 @@ export default function LoginPage() {
 
   // Initialize Google Identity Services strictly once
   useEffect(() => {
-    if (!scriptReady || !config?.client_id || !config?.nonce || !window.google || !googleBtnRef.current || initializedRef.current) return;
+    if (!scriptReady || !config?.nonce || !window.google || !googleBtnRef.current || initializedRef.current) return;
     try {
       initializedRef.current = true;
+      const effectiveClientId = config.client_id || FALLBACK_CLIENT_ID;
       window.google.accounts.id.initialize({
-        client_id: config.client_id,
+        client_id: effectiveClientId,
         nonce: config.nonce,
         auto_select: false,
         itp_support: true,
