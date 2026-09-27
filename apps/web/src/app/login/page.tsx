@@ -60,6 +60,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleRendered, setGoogleRendered] = useState(false);
 
   // Safely fetch Google auth nonce without crashing if backend returns HTML during cold starts
   useEffect(() => {
@@ -120,6 +121,7 @@ export default function LoginPage() {
         text: 'continue_with',
         width: 360,
       });
+      setGoogleRendered(true);
     } catch (err) {
       console.error('Google button init error:', err);
     }
@@ -354,7 +356,7 @@ export default function LoginPage() {
               />
 
               {/* Styled Fallback Google Button */}
-              {(!scriptReady || !googleBtnRef.current?.hasChildNodes()) && (
+              {!googleRendered && (
                 <button
                   type="button"
                   onClick={handleGoogleClick}
