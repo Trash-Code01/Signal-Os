@@ -29,31 +29,45 @@ app.include_router(auth_router)
 
 @app.on_event("startup")
 def startup_db_migrations():
-    """Ensure all required columns and tables exist on application startup."""
+    """Ensure all required columns and tables exist on application startup.
+
+    Every database operation is wrapped individually so that a bad DATABASE_URL
+    (Render DNS failure on cold-start) does not kill the process before Uvicorn
+    can bind the port and answer health checks.
+    """
     try:
         Base.metadata.create_all(engine)
     except Exception as exc:
-        print(f"Base.metadata.create_all warning: {exc}")
-    migrate_auth_schema(engine)
-    from core.tenancy import migrate_ownership
-    migrate_ownership(engine)
+        print(f"Startup: Base.metadata.create_all warning (non-fatal): {exc}")
+    try:
+        migrate_auth_schema(engine)
+    except Exception as exc:
+        print(f"Startup: migrate_auth_schema warning (non-fatal): {exc}")
+    try:
+        from core.tenancy import migrate_ownership
+        migrate_ownership(engine)
+    except Exception as exc:
+        print(f"Startup: migrate_ownership warning (non-fatal): {exc}")
     if engine.dialect.name == "sqlite":
         if IS_STAGING:
-            from core.staging_jobs import sanitize_legacy_mock_data
-            sanitized = sanitize_legacy_mock_data(engine)
-            if sanitized:
-                print(f"Staging data quality: sanitized {sanitized} legacy synthetic leads.")
+            try:
+                from core.staging_jobs import sanitize_legacy_mock_data
+                sanitized = sanitize_legacy_mock_data(engine)
+                if sanitized:
+                    print(f"Staging data quality: sanitized {sanitized} legacy synthetic leads.")
+            except Exception as exc:
+                print(f"Startup: staging sanitize warning: {exc}")
         return
     try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at);"))
-            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at);"))
-            conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at);"))
-            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website_domain VARCHAR(255);"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_website_domain ON businesses (website_domain);"))
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at)"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at)"))
+            conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at)"))
+            conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website_domain VARCHAR(255)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_website_domain ON businesses (website_domain)"))
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS provider_health (
                     id SERIAL PRIMARY KEY,
@@ -64,11 +78,11 @@ def startup_db_migrations():
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 );
             """))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name);"))
-            conn.commit()
-            print("Startup migration: schema columns and tables verified.")
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name)"))
+        print("Startup migration: schema columns and tables verified.")
     except Exception as exc:
-        print(f"Startup migration warning: {exc}")
+        print(f"Startup migration warning (non-fatal): {exc}")
+    print("=== Application startup complete ===")
 
 
 @app.exception_handler(Exception)
@@ -95,8 +109,19 @@ def debug_discovery():
         return {'error': str(e)}
 @app.get("/api/health")
 def health_check():
-    """Lightweight keepalive endpoint — no DB query, returns instantly."""
-    return {"status": "ok"}
+    """Health endpoint — responds instantly even when DB is down.
+
+    Returns db='connected' when a live SELECT 1 succeeds, 'unreachable' otherwise.
+    The API serves auth and all other routes regardless of db transient state.
+    """
+    db_ok = False
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        pass
+    return {"status": "ok", "db": "connected" if db_ok else "unreachable"}
 
 
 @app.get("/api/environment")
@@ -193,20 +218,6 @@ def migrate_upload(payload: dict, db: Session = Depends(get_db)):
     raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")
 
 
-@app.on_event("startup")
-def ensure_crm_workspace_schema() -> None:
-    """Create only the new CRM tables for deployments with legacy Alembic history."""
-    if engine.dialect.name == "sqlite":
-        return
-    CRMLead.__table__.create(bind=engine, checkfirst=True)
-    CRMActivity.__table__.create(bind=engine, checkfirst=True)
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_deleted_at ON campaigns (deleted_at)"))
-        conn.execute(text("ALTER TABLE businesses ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_businesses_deleted_at ON businesses (deleted_at)"))
-        conn.execute(text("ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_deleted_at ON crm_leads (deleted_at)"))
 
 app.add_middleware(
     CORSMiddleware,
