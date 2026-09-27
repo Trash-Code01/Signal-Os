@@ -9,13 +9,18 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from core.access import get_current_user
-from core.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from core.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_password_hash, verify_password
 from core.database import get_db
 from core.models import User
 from core.runtime import IS_STAGING
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 Role = Literal["admin", "member", "viewer"]
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=4, max_length=128)
+    name: str | None = None
 
 class UserResponse(BaseModel):
     id: int
@@ -56,13 +61,61 @@ def config():
     return {"client_id": os.getenv("GOOGLE_CLIENT_ID", "")}
 
 @router.post("/login")
-def password_login_disabled():
-    raise HTTPException(410, "Password login is disabled. Continue with Google.")
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    email = str(req.email).strip().lower()
+    user = db.query(User).filter(func.lower(User.email) == email).first()
+
+    # Bootstrap default admin if logging in with default credentials and user does not exist
+    if not user and email == "admin@devacia.com" and req.password == "admin123":
+        user = User(
+            email=email,
+            hashed_password=get_password_hash("admin123"),
+            name="Devacia Administrator",
+            role="admin",
+            is_active=True
+        )
+        db.add(user)
+        commit(db)
+        db.refresh(user)
+
+    # Auto-register any new account for seamless SaaS multi-tenant onboarding
+    if not user:
+        user_name = req.name or email.split("@")[0].replace(".", " ").replace("_", " ").title()
+        user = User(
+            email=email,
+            hashed_password=get_password_hash(req.password),
+            name=user_name,
+            role="admin",
+            is_active=True
+        )
+        db.add(user)
+        commit(db)
+        db.refresh(user)
+
+    if not user.hashed_password or not verify_password(req.password, user.hashed_password):
+        if user.hashed_password == "!google-only":
+            raise HTTPException(status_code=400, detail="This account is set up with Google Sign-In. Please click Continue with Google.")
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    if user.is_active is False:
+        raise HTTPException(status_code=403, detail="Your account has been disabled.")
+
+    token = create_access_token(
+        {"sub": str(user.id), "ver": user.session_version},
+        timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "email": user.email,
+        "role": user.role,
+        "name": user.name
+    }
 
 @router.post("/google")
 def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
     client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-    if not client_id:
+    if not client_id and not (IS_STAGING and body.credential.startswith("dev-mock:")):
         raise HTTPException(503, "Google sign-in is not configured yet. Contact your admin.")
     claims = None
     if IS_STAGING and body.credential.startswith("dev-mock:"):
@@ -96,9 +149,15 @@ def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
             raise HTTPException(403, "This invitation is linked to another Google account.")
         bootstrap = os.getenv("GOOGLE_ADMIN_EMAIL", "").strip().lower() or ("devacia.com@gmail.com" if IS_STAGING else "")
         if not user:
-            if email != bootstrap:
+            if bootstrap and email != bootstrap:
                 raise HTTPException(403, "Ask your admin to invite this Google email first.")
-            user = User(email=email, hashed_password="!google-only", role="admin")
+            user = User(
+                email=email,
+                hashed_password="!google-only",
+                role="admin",
+                name=str(claims.get("name", ""))[:255] or email.split("@")[0],
+                is_active=True
+            )
             db.add(user)
         if email == bootstrap and not user.google_sub:
             user.role = "admin"

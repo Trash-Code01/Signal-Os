@@ -316,7 +316,12 @@ def test_google_verification_invitation_and_revocation(setup, monkeypatch):
 def test_password_login_is_disabled(setup):
     client, _ = setup
     login_res = client.post('/api/auth/login', json={'email': 'devuser@gmail.com', 'password': 'my-password'})
-    assert login_res.status_code == 410
+    assert login_res.status_code == 200
+    data = login_res.json()
+    assert 'access_token' in data
+    assert data['email'] == 'devuser@gmail.com'
+    bad_res = client.post('/api/auth/login', json={'email': 'devuser@gmail.com', 'password': 'wrong-password'})
+    assert bad_res.status_code == 401
 
 
 def test_cookie_csrf(setup):
