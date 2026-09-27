@@ -11,10 +11,20 @@ export async function POST(request: NextRequest) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       cache: 'no-store',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(60000),
     });
 
-    const data = await backend.json().catch(() => ({}));
+    const text = await backend.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return NextResponse.json(
+        { detail: 'Backend service is waking up on Render. Please wait 15 seconds and try again.' },
+        { status: 503 }
+      );
+    }
+
     if (!backend.ok) {
       return NextResponse.json(
         { detail: data.detail || 'Incorrect email or password' },
@@ -30,7 +40,7 @@ export async function POST(request: NextRequest) {
     return response;
   } catch {
     return NextResponse.json(
-      { detail: 'Unable to connect to authentication backend. Please check server.' },
+      { detail: 'Authentication backend is connecting. Please wait 15 seconds and retry.' },
       { status: 503 }
     );
   }

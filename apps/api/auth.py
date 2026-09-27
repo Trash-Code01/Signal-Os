@@ -170,7 +170,13 @@ def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
     commit(db)
     db.refresh(user)
     token = create_access_token({"sub": str(user.id), "ver": user.session_version}, timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    return {"access_token": token, "token_type": "bearer"}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "email": user.email,
+        "role": user.role,
+        "name": user.name
+    }
 
 @router.get("/me", response_model=UserResponse)
 def me(user: User = Depends(get_current_user)):

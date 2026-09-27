@@ -30,11 +30,14 @@ app.include_router(auth_router)
 @app.on_event("startup")
 def startup_db_migrations():
     """Ensure all required columns and tables exist on application startup."""
+    try:
+        Base.metadata.create_all(engine)
+    except Exception as exc:
+        print(f"Base.metadata.create_all warning: {exc}")
     migrate_auth_schema(engine)
     from core.tenancy import migrate_ownership
     migrate_ownership(engine)
     if engine.dialect.name == "sqlite":
-        Base.metadata.create_all(engine)
         if IS_STAGING:
             from core.staging_jobs import sanitize_legacy_mock_data
             sanitized = sanitize_legacy_mock_data(engine)
@@ -207,7 +210,7 @@ def ensure_crm_workspace_schema() -> None:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in os.getenv("FRONTEND_ORIGIN", "http://localhost:3001").split(",")],
+    allow_origins=list({origin.strip() for origin in os.getenv("FRONTEND_ORIGIN", "https://devacia-frontend.onrender.com,http://localhost:3001,http://127.0.0.1:3001").split(",") if origin.strip()} | {"https://devacia-frontend.onrender.com", "http://localhost:3001", "http://127.0.0.1:3001"}),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

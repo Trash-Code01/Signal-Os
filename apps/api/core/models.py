@@ -14,7 +14,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
+    hashed_password = Column(String(255), nullable=False, default="!no-password", server_default="!no-password")
     google_sub = Column(String(255), unique=True, nullable=True)
     name = Column(String(255), nullable=True)
     role = Column(String(20), nullable=False, default="viewer", server_default="viewer")

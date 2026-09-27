@@ -6,6 +6,7 @@ def migrate_auth_schema(engine):
     User.__table__.create(engine, checkfirst=True)
     columns = {column["name"] for column in inspect(engine).get_columns("users")}
     additions = {
+        "hashed_password": "VARCHAR(255) NOT NULL DEFAULT '!no-password'",
         "created_at": "TIMESTAMP",
         "google_sub": "VARCHAR(255)", "name": "VARCHAR(255)",
         "role": "VARCHAR(20) NOT NULL DEFAULT 'viewer'",
