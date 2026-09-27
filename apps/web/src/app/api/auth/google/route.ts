@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { hasValidRequestOrigin } from '@/lib/requestOrigin';
 
 const DEFAULT_GOOGLE_CLIENT_ID = '991104064928-r9v2tcb04lpgjo412np3tr1riep2gjeq.apps.googleusercontent.com';
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const cookie = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const, path: '/' };
 
 export async function GET() {

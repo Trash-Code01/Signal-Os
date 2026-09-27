@@ -1,9 +1,8 @@
-﻿import type { NextConfig } from 'next';
+import type { NextConfig } from 'next';
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 const nextConfig: NextConfig = {
-  // Keep verification builds separate from a running development server.
   distDir: process.env.NEXT_DIST_DIR || '.next',
   output: 'standalone',
   eslint: {
@@ -11,6 +10,19 @@ const nextConfig: NextConfig = {
   },
   typescript: {
     ignoreBuildErrors: true,
+  },
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Cross-Origin-Opener-Policy',
+            value: 'same-origin-allow-popups',
+          },
+        ],
+      },
+    ];
   },
   async rewrites() {
     return [

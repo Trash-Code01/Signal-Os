@@ -47,6 +47,7 @@ declare global {
 
 export default function LoginPage() {
   const googleBtnRef = useRef<HTMLDivElement>(null);
+  const initializedRef = useRef(false);
   const [scriptReady, setScriptReady] = useState(false);
   const [config, setConfig] = useState<{ client_id: string; nonce: string }>({
     client_id: FALLBACK_CLIENT_ID,
@@ -82,13 +83,17 @@ export default function LoginPage() {
       .catch(() => {});
   }, []);
 
-  // Initialize Google Identity Services
+  // Initialize Google Identity Services strictly once
   useEffect(() => {
-    if (!scriptReady || !config?.client_id || !window.google || !googleBtnRef.current) return;
+    if (!scriptReady || !config?.client_id || !config?.nonce || !window.google || !googleBtnRef.current || initializedRef.current) return;
     try {
+      initializedRef.current = true;
       window.google.accounts.id.initialize({
         client_id: config.client_id,
-        nonce: config.nonce || 'fallback-nonce-devacia',
+        nonce: config.nonce,
+        auto_select: false,
+        itp_support: true,
+        use_fedcm_for_prompt: true,
         callback: async ({ credential }) => {
           setGoogleLoading(true);
           setError('');
@@ -96,19 +101,19 @@ export default function LoginPage() {
             const response = await fetch('/api/auth/google', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ credential, nonce: config.nonce || 'fallback-nonce-devacia' }),
+              body: JSON.stringify({ credential, nonce: config.nonce }),
             });
             const text = await response.text();
             let data: any = {};
             try {
               data = JSON.parse(text);
             } catch {
-              throw new Error('Backend is waking up from sleep. Please wait 10 seconds and retry.');
+              throw new Error('Authentication backend is starting. Please wait a moment and retry.');
             }
-            if (!response.ok) throw new Error(data.detail || 'Google sign-in failed.');
+            if (!response.ok) throw new Error(data.detail || 'Google sign-in could not be completed.');
             window.location.replace('/dashboard');
           } catch (reason) {
-            setError(reason instanceof Error ? reason.message : 'Google sign-in failed.');
+            setError(reason instanceof Error ? reason.message : 'Google sign-in could not be completed.');
             setGoogleLoading(false);
           }
         },
