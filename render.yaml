@@ -62,6 +62,10 @@ services:
           type: web
           name: devacia-backend
           envVarKey: RENDER_EXTERNAL_URL
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        value: 991104064928-r9v2tcb04lpgjo412np3tr1riep2gjeq.apps.googleusercontent.com
+      - key: GOOGLE_CLIENT_ID
+        value: 991104064928-r9v2tcb04lpgjo412np3tr1riep2gjeq.apps.googleusercontent.com
 
   # 3. Redis Memory Cache
   - type: redis
