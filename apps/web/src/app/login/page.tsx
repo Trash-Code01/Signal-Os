@@ -2,25 +2,21 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
-import { 
-  Terminal, 
-  Mail, 
-  Lock, 
-  User as UserIcon, 
-  ArrowRight, 
-  Sparkles, 
-  ShieldCheck, 
-  Eye, 
-  EyeOff, 
-  CheckCircle2, 
-  Database, 
-  Search, 
-  Zap, 
-  Globe,
-  Layers
+import { authRequest } from '@/lib/authRequest';
+import {
+  Terminal,
+  Mail,
+  Lock,
+  User as UserIcon,
+  ArrowRight,
+  Sparkles,
+  ShieldCheck,
+  Eye,
+  EyeOff,
+  Database,
+  Search,
+  Zap,
 } from 'lucide-react';
-
-const FALLBACK_CLIENT_ID = '991104064928-r9v2tcb04lpgjo412np3tr1riep2gjeq.apps.googleusercontent.com';
 
 type GoogleIdentity = {
   accounts: {
@@ -28,6 +24,9 @@ type GoogleIdentity = {
       initialize: (options: {
         client_id: string;
         nonce: string;
+        auto_select: boolean;
+        itp_support: boolean;
+        use_fedcm_for_prompt: boolean;
         callback: (response: { credential: string }) => void;
       }) => void;
       renderButton: (
@@ -49,10 +48,10 @@ export default function LoginPage() {
   const googleBtnRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const [scriptReady, setScriptReady] = useState(false);
-  const [config, setConfig] = useState<{ client_id: string; nonce: string }>({
-    client_id: FALLBACK_CLIENT_ID,
-    nonce: '',
-  });
+  const [config, setConfig] = useState<{ client_id: string; nonce: string } | null>(null);
+  const [configAttempt, setConfigAttempt] = useState(0);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [googleError, setGoogleError] = useState('');
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -63,34 +62,31 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleRendered, setGoogleRendered] = useState(false);
 
-  // Safely fetch Google auth nonce without crashing if backend returns HTML during cold starts
   useEffect(() => {
-    fetch('/api/auth/google', { cache: 'no-store' })
-      .then(async (response) => {
-        const text = await response.text();
-        try {
-          const data = JSON.parse(text);
-          if (data && data.nonce) {
-            setConfig({
-              client_id: data.client_id || FALLBACK_CLIENT_ID,
-              nonce: data.nonce,
-            });
-          }
-        } catch {
-          // Graceful fallback to default client ID
+    let active = true;
+    const controller = new AbortController();
+    setConfigLoading(true);
+    setGoogleError('');
+    void authRequest('/api/auth/google', { signal: controller.signal })
+      .then((data) => {
+        if (typeof data.client_id !== 'string' || typeof data.nonce !== 'string') {
+          throw new Error('Google sign-in is unavailable. Please retry.');
         }
+        if (active) setConfig({ client_id: data.client_id, nonce: data.nonce });
       })
-      .catch(() => {});
-  }, []);
+      .catch((reason) => {
+        if (active) setGoogleError(reason instanceof Error ? reason.message : 'Google sign-in is unavailable.');
+      })
+      .finally(() => { if (active) setConfigLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [configAttempt]);
 
   // Initialize Google Identity Services strictly once
   useEffect(() => {
     if (!scriptReady || !config?.nonce || !window.google || !googleBtnRef.current || initializedRef.current) return;
     try {
-      initializedRef.current = true;
-      const effectiveClientId = config.client_id || FALLBACK_CLIENT_ID;
       window.google.accounts.id.initialize({
-        client_id: effectiveClientId,
+        client_id: config.client_id,
         nonce: config.nonce,
         auto_select: false,
         itp_support: true,
@@ -99,22 +95,15 @@ export default function LoginPage() {
           setGoogleLoading(true);
           setError('');
           try {
-            const response = await fetch('/api/auth/google', {
+            await authRequest('/api/auth/google', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ credential, nonce: config.nonce }),
             });
-            const text = await response.text();
-            let data: any = {};
-            try {
-              data = JSON.parse(text);
-            } catch {
-              throw new Error('Authentication backend is starting. Please wait a moment and retry.');
-            }
-            if (!response.ok) throw new Error(data.detail || 'Google sign-in could not be completed.');
             window.location.replace('/dashboard');
           } catch (reason) {
             setError(reason instanceof Error ? reason.message : 'Google sign-in could not be completed.');
+          } finally {
             setGoogleLoading(false);
           }
         },
@@ -127,17 +116,20 @@ export default function LoginPage() {
         text: 'continue_with',
         width: 360,
       });
+      initializedRef.current = true;
       setGoogleRendered(true);
     } catch (err) {
-      console.error('Google button init error:', err);
+      setGoogleError(err instanceof Error ? err.message : 'Google sign-in could not load. Please reload the page.');
     }
   }, [scriptReady, config]);
 
   const handleGoogleClick = () => {
-    if (window.google?.accounts?.id?.prompt) {
+    if (!config) {
+      setConfigAttempt((attempt) => attempt + 1);
+    } else if (initializedRef.current && window.google) {
       window.google.accounts.id.prompt();
     } else {
-      setError('Loading Google authentication service… please click again in a moment.');
+      setGoogleError('Google sign-in could not load. Please reload this page and try again.');
     }
   };
 
@@ -156,7 +148,7 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const response = await fetch('/api/auth/login', {
+      await authRequest('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -166,56 +158,10 @@ export default function LoginPage() {
         }),
       });
 
-      const text = await response.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error('Backend service is starting up. Please retry in a few moments.');
-      }
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Sign-in failed. Please verify credentials.');
-      }
-
       window.location.replace('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed. Please retry.');
-      setLoading(false);
-    }
-  };
-
-  const handleDevSignIn = async (userEmail: string = 'admin@devacia.com', userPassword: string = 'admin123') => {
-    setEmail(userEmail);
-    setPassword(userPassword);
-    setLoading(true);
-    setError('');
-
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: userEmail,
-          password: userPassword,
-        }),
-      });
-
-      const text = await response.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error('Backend service is waking up.');
-      }
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Quick sign-in failed.');
-      }
-
-      window.location.replace('/dashboard');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Quick sign-in failed.');
+    } finally {
       setLoading(false);
     }
   };
@@ -226,10 +172,10 @@ export default function LoginPage() {
         src="https://accounts.google.com/gsi/client"
         strategy="afterInteractive"
         onReady={() => setScriptReady(true)}
-        onError={() => {}}
+        onError={() => setGoogleError('Google sign-in could not load. Check your connection and reload the page.')}
       />
 
-      {/* LEFT COLUMN: Enterprise Showcase & Branding (Hidden on mobile/tablet, glorious on desktop) */}
+      {/* LEFT COLUMN: Enterprise Showcase & Branding */}
       <div className="hidden lg:flex lg:col-span-6 xl:col-span-7 flex-col justify-between p-12 lg:p-16 border-r border-zinc-800/60 bg-gradient-to-br from-[#0c0c10] via-[#09090d] to-[#050507] relative overflow-hidden">
         {/* Ambient background glow & grid */}
         <div className="absolute top-0 -left-20 w-96 h-96 bg-violet-600/10 rounded-full blur-3xl pointer-events-none" />
@@ -273,7 +219,7 @@ export default function LoginPage() {
               <div>
                 <h4 className="text-sm font-semibold text-zinc-200">Multi-Directory Discovery Engine</h4>
                 <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
-                  Real-time Google SERP & Google Maps scraping with advanced Boolean qualification.
+                  Real-time Google SERP &amp; Google Maps scraping with advanced Boolean qualification.
                 </p>
               </div>
             </div>
@@ -317,10 +263,10 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* RIGHT COLUMN: The Luxury Authentication Interface */}
+      {/* RIGHT COLUMN: Authentication Interface */}
       <div className="col-span-12 lg:col-span-6 xl:col-span-5 flex items-center justify-center p-6 sm:p-10 relative">
         <div className="w-full max-w-md">
-          {/* Mobile brand header (shown on small screens only) */}
+          {/* Mobile brand header */}
           <div className="lg:hidden text-center mb-8">
             <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-violet-600 to-indigo-500 text-white shadow-lg shadow-violet-600/30">
               <Terminal className="h-6 w-6" />
@@ -330,7 +276,7 @@ export default function LoginPage() {
           </div>
 
           <div className="rounded-3xl border border-zinc-800/90 bg-[#111114]/90 p-8 sm:p-9 shadow-2xl shadow-black/80 backdrop-blur-xl">
-            {/* Form Title & Subtitle */}
+            {/* Form Title */}
             <div className="mb-6">
               <h2 className="text-2xl font-bold tracking-tight text-white">
                 {mode === 'signin' ? 'Welcome back' : 'Create workspace'}
@@ -349,7 +295,7 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* Method 1: Google Single Sign-On (Prominent) */}
+            {/* Google Single Sign-On */}
             <div className="space-y-3">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block text-center">
                 One-Click Single Sign-On
@@ -358,36 +304,27 @@ export default function LoginPage() {
               {/* Official Google Identity Button mount */}
               <div
                 ref={googleBtnRef}
-                className={`flex justify-center min-h-[44px] ${googleLoading ? 'pointer-events-none opacity-50' : ''}`}
+                className={`flex justify-center min-h-[44px] ${googleLoading || loading ? 'pointer-events-none opacity-50' : ''}`}
               />
 
-              {/* Styled Fallback Google Button */}
+              {googleError && <p role="alert" className="text-center text-xs text-rose-300">{googleError}</p>}
+              {configLoading && <p role="status" className="text-center text-xs text-zinc-400">Preparing secure sign-in…</p>}
+
+              {/* Fallback Google Button */}
               {!googleRendered && (
                 <button
                   type="button"
                   onClick={handleGoogleClick}
-                  disabled={googleLoading || loading}
+                  disabled={googleLoading || loading || configLoading}
                   className="w-full flex items-center justify-center gap-3 rounded-xl border border-zinc-700/80 bg-zinc-900/90 hover:bg-zinc-800 text-white font-medium py-2.5 px-4 text-sm transition-all shadow-sm cursor-pointer disabled:opacity-50"
                 >
                   <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                    <path
-                      fill="#4285F4"
-                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                    />
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                   </svg>
-                  <span>Continue with Google</span>
+                  <span>{configLoading ? 'Connecting…' : 'Continue with Google'}</span>
                 </button>
               )}
 
@@ -403,12 +340,12 @@ export default function LoginPage() {
               </div>
               <div className="relative flex justify-center text-[10px] uppercase">
                 <span className="bg-[#111114] px-3 text-zinc-500 font-semibold tracking-wider">
-                  or work email credentials
+                  or continue with email
                 </span>
               </div>
             </div>
 
-            {/* Tab Switcher: Sign In vs Create Account */}
+            {/* Tab Switcher */}
             <div className="flex rounded-xl bg-zinc-950/70 p-1 border border-zinc-800/80 mb-5">
               <button
                 type="button"
@@ -498,40 +435,24 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading || googleLoading}
-                className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-semibold py-2.5 px-4 text-sm transition-all duration-150 shadow-lg shadow-violet-600/30 disabled:opacity-50 cursor-pointer"
+                className="w-full mt-1 relative flex items-center justify-center gap-2 rounded-xl bg-white text-zinc-900 hover:bg-zinc-100 font-semibold py-2.5 px-4 text-sm transition-all duration-150 shadow-md disabled:opacity-50 cursor-pointer group"
               >
                 {loading ? (
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span className="w-4 h-4 border-2 border-zinc-400 border-t-zinc-900 rounded-full animate-spin" />
                 ) : (
                   <>
-                    <span>{mode === 'signin' ? 'Sign In to Workspace' : 'Create Isolated Workspace'}</span>
-                    <ArrowRight className="h-4 w-4" />
+                    <span>{mode === 'signin' ? 'Sign in' : 'Create account'}</span>
+                    <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                   </>
                 )}
               </button>
             </form>
 
-            {/* Quick Sandbox Access Badge */}
-            <div className="mt-6 pt-4 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-400">
-              <span className="flex items-center gap-1.5 text-zinc-400">
-                <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                Quick Sandbox Access:
-              </span>
-              <button
-                type="button"
-                onClick={() => handleDevSignIn('admin@devacia.com', 'admin123')}
-                disabled={loading || googleLoading}
-                className="font-mono text-[11px] text-violet-400 hover:text-violet-300 underline font-semibold transition-colors cursor-pointer"
-              >
-                admin@devacia.com
-              </button>
-            </div>
-
-            {/* Multi-Tenant Security Note */}
-            <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3 text-[11px] text-zinc-400 flex items-start gap-2.5">
+            {/* Security Note */}
+            <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3 text-[11px] text-zinc-400 flex items-start gap-2.5">
               <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
               <p className="leading-relaxed text-zinc-400">
-                <strong className="text-zinc-300">Multi-Tenant Isolation:</strong> Each account's campaigns, search queries, leads, and exports are strictly isolated.
+                <strong className="text-zinc-300">Multi-Tenant Isolation:</strong> Each account&apos;s campaigns, search queries, leads, and exports are strictly isolated.
               </p>
             </div>
           </div>
