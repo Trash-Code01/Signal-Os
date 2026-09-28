@@ -44,13 +44,20 @@ declare global {
   }
 }
 
+const MAX_AUTO_RETRIES = 8;
+const RETRY_INTERVAL_MS = 8_000;
+
 export default function LoginPage() {
   const googleBtnRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [scriptReady, setScriptReady] = useState(false);
   const [config, setConfig] = useState<{ client_id: string; nonce: string } | null>(null);
   const [configAttempt, setConfigAttempt] = useState(0);
+  const [autoRetryCount, setAutoRetryCount] = useState(0);
   const [configLoading, setConfigLoading] = useState(true);
+  const [warmingUp, setWarmingUp] = useState(false);
   const [googleError, setGoogleError] = useState('');
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [name, setName] = useState('');
@@ -62,24 +69,59 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleRendered, setGoogleRendered] = useState(false);
 
+  // Fetch nonce + client_id from backend; auto-retry on cold-start timeouts
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
     setConfigLoading(true);
     setGoogleError('');
+
     void authRequest('/api/auth/google', { signal: controller.signal })
       .then((data) => {
         if (typeof data.client_id !== 'string' || typeof data.nonce !== 'string') {
           throw new Error('Google sign-in is unavailable. Please retry.');
         }
-        if (active) setConfig({ client_id: data.client_id, nonce: data.nonce });
+        if (active) {
+          setConfig({ client_id: data.client_id, nonce: data.nonce });
+          setWarmingUp(false);
+          setAutoRetryCount(0);
+          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+        }
       })
       .catch((reason) => {
-        if (active) setGoogleError(reason instanceof Error ? reason.message : 'Google sign-in is unavailable.');
+        if (!active) return;
+        const msg: string = reason instanceof Error ? reason.message : '';
+        // Cold-start: backend is sleeping on Render free tier → auto-retry silently
+        const isColdStart =
+          msg.includes('too long') ||
+          msg.includes('unavailable') ||
+          msg.includes('connect') ||
+          msg.includes('503');
+
+        if (isColdStart && autoRetryCount < MAX_AUTO_RETRIES) {
+          setWarmingUp(true);
+          setGoogleError('');
+          retryTimerRef.current = setTimeout(() => {
+            if (active) {
+              setAutoRetryCount((c) => c + 1);
+              setConfigAttempt((a) => a + 1);
+            }
+          }, RETRY_INTERVAL_MS);
+        } else {
+          setWarmingUp(false);
+          setGoogleError(msg || 'Google sign-in is unavailable. Please reload and try again.');
+        }
       })
-      .finally(() => { if (active) setConfigLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [configAttempt]);
+      .finally(() => {
+        if (active) setConfigLoading(false);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, [configAttempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initialize Google Identity Services strictly once
   useEffect(() => {
@@ -125,7 +167,8 @@ export default function LoginPage() {
 
   const handleGoogleClick = () => {
     if (!config) {
-      setConfigAttempt((attempt) => attempt + 1);
+      setAutoRetryCount(0);
+      setConfigAttempt((a) => a + 1);
     } else if (initializedRef.current && window.google) {
       window.google.accounts.id.prompt();
     } else {
@@ -143,10 +186,8 @@ export default function LoginPage() {
       setError('Password must be at least 4 characters.');
       return;
     }
-
     setLoading(true);
     setError('');
-
     try {
       await authRequest('/api/auth/login', {
         method: 'POST',
@@ -157,7 +198,6 @@ export default function LoginPage() {
           name: mode === 'signup' ? name.trim() : undefined,
         }),
       });
-
       window.location.replace('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed. Please retry.');
@@ -175,14 +215,12 @@ export default function LoginPage() {
         onError={() => setGoogleError('Google sign-in could not load. Check your connection and reload the page.')}
       />
 
-      {/* LEFT COLUMN: Enterprise Showcase & Branding */}
+      {/* LEFT COLUMN */}
       <div className="hidden lg:flex lg:col-span-6 xl:col-span-7 flex-col justify-between p-12 lg:p-16 border-r border-zinc-800/60 bg-gradient-to-br from-[#0c0c10] via-[#09090d] to-[#050507] relative overflow-hidden">
-        {/* Ambient background glow & grid */}
         <div className="absolute top-0 -left-20 w-96 h-96 bg-violet-600/10 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 right-0 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute inset-0 bg-[radial-gradient(#1f1f2e_1px,transparent_1px)] [background-size:24px_24px] opacity-20 pointer-events-none" />
 
-        {/* Top Header */}
         <div className="relative z-10">
           <div className="flex items-center gap-3.5">
             <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-violet-600 to-indigo-500 flex items-center justify-center text-white font-bold shadow-lg shadow-violet-600/30">
@@ -195,7 +233,6 @@ export default function LoginPage() {
           </div>
         </div>
 
-        {/* Center Hero Value Proposition */}
         <div className="relative z-10 my-auto py-12 max-w-xl">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300 text-xs font-medium mb-6">
             <Sparkles className="h-3.5 w-3.5 text-amber-400" />
@@ -203,14 +240,16 @@ export default function LoginPage() {
           </div>
 
           <h1 className="text-4xl xl:text-5xl font-extrabold tracking-tight text-white leading-[1.15]">
-            Turn web signals into verified pipeline <span className="bg-gradient-to-r from-violet-400 via-indigo-300 to-purple-400 bg-clip-text text-transparent">in seconds.</span>
+            Turn web signals into verified pipeline{' '}
+            <span className="bg-gradient-to-r from-violet-400 via-indigo-300 to-purple-400 bg-clip-text text-transparent">
+              in seconds.
+            </span>
           </h1>
 
           <p className="mt-4 text-base text-zinc-400 leading-relaxed">
             Autonomous multi-source discovery, deep website signal auditing, and verified contact enrichment — built with enterprise data isolation for high-converting sales teams.
           </p>
 
-          {/* Three Feature Highlight Cards */}
           <div className="mt-8 space-y-3.5">
             <div className="flex items-start gap-3.5 p-3.5 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 backdrop-blur-sm">
               <div className="h-9 w-9 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400 shrink-0 mt-0.5">
@@ -218,9 +257,7 @@ export default function LoginPage() {
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-zinc-200">Multi-Directory Discovery Engine</h4>
-                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
-                  Real-time Google SERP &amp; Google Maps scraping with advanced Boolean qualification.
-                </p>
+                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Real-time Google SERP &amp; Google Maps scraping with advanced Boolean qualification.</p>
               </div>
             </div>
 
@@ -230,9 +267,7 @@ export default function LoginPage() {
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-zinc-200">Verified Contact Intelligence</h4>
-                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
-                  Identifies company leadership, verified work emails, and direct mobile lines.
-                </p>
+                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Identifies company leadership, verified work emails, and direct mobile lines.</p>
               </div>
             </div>
 
@@ -242,15 +277,12 @@ export default function LoginPage() {
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-zinc-200">Multi-Tenant Database Isolation</h4>
-                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
-                  Every account receives an isolated workspace. Your leads and campaigns are 100% private.
-                </p>
+                <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Every account receives an isolated workspace. Your leads and campaigns are 100% private.</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Bottom Trust & Security Metrics */}
         <div className="relative z-10 pt-6 border-t border-zinc-800/60 flex items-center justify-between text-xs text-zinc-400">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -263,7 +295,7 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* RIGHT COLUMN: Authentication Interface */}
+      {/* RIGHT COLUMN */}
       <div className="col-span-12 lg:col-span-6 xl:col-span-5 flex items-center justify-center p-6 sm:p-10 relative">
         <div className="w-full max-w-md">
           {/* Mobile brand header */}
@@ -276,7 +308,7 @@ export default function LoginPage() {
           </div>
 
           <div className="rounded-3xl border border-zinc-800/90 bg-[#111114]/90 p-8 sm:p-9 shadow-2xl shadow-black/80 backdrop-blur-xl">
-            {/* Form Title */}
+            {/* Title */}
             <div className="mb-6">
               <h2 className="text-2xl font-bold tracking-tight text-white">
                 {mode === 'signin' ? 'Welcome back' : 'Create workspace'}
@@ -295,23 +327,36 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* Google Single Sign-On */}
+            {/* Google SSO */}
             <div className="space-y-3">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block text-center">
                 One-Click Single Sign-On
               </p>
 
-              {/* Official Google Identity Button mount */}
+              {/* Warm-up banner — shown only during auto-retry cold-start */}
+              {warmingUp && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-300">
+                  <span className="w-3.5 h-3.5 rounded-full border-2 border-amber-400/40 border-t-amber-300 animate-spin shrink-0" />
+                  <span>
+                    Backend warming up — connecting automatically
+                    {autoRetryCount > 0 ? ` (attempt ${autoRetryCount}/${MAX_AUTO_RETRIES})` : ''}…
+                  </span>
+                </div>
+              )}
+
+              {/* Official GIS button mount */}
               <div
                 ref={googleBtnRef}
                 className={`flex justify-center min-h-[44px] ${googleLoading || loading ? 'pointer-events-none opacity-50' : ''}`}
               />
 
-              {googleError && <p role="alert" className="text-center text-xs text-rose-300">{googleError}</p>}
-              {configLoading && <p role="status" className="text-center text-xs text-zinc-400">Preparing secure sign-in…</p>}
+              {/* Persistent error (after all retries exhausted) */}
+              {googleError && !warmingUp && (
+                <p role="alert" className="text-center text-xs text-rose-300">{googleError}</p>
+              )}
 
-              {/* Fallback Google Button */}
-              {!googleRendered && (
+              {/* Fallback button — shown before GIS renders */}
+              {!googleRendered && !warmingUp && (
                 <button
                   type="button"
                   onClick={handleGoogleClick}
@@ -324,7 +369,7 @@ export default function LoginPage() {
                     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                   </svg>
-                  <span>{configLoading ? 'Connecting…' : 'Continue with Google'}</span>
+                  <span>{configLoading && !warmingUp ? 'Connecting…' : 'Continue with Google'}</span>
                 </button>
               )}
 
@@ -339,9 +384,7 @@ export default function LoginPage() {
                 <div className="w-full border-t border-zinc-800" />
               </div>
               <div className="relative flex justify-center text-[10px] uppercase">
-                <span className="bg-[#111114] px-3 text-zinc-500 font-semibold tracking-wider">
-                  or continue with email
-                </span>
+                <span className="bg-[#111114] px-3 text-zinc-500 font-semibold tracking-wider">or continue with email</span>
               </div>
             </div>
 
@@ -351,9 +394,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => { setMode('signin'); setError(''); }}
                 className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  mode === 'signin'
-                    ? 'bg-violet-600 text-white shadow-sm'
-                    : 'text-zinc-400 hover:text-zinc-200'
+                  mode === 'signin' ? 'bg-violet-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 Sign In
@@ -362,9 +403,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => { setMode('signup'); setError(''); }}
                 className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  mode === 'signup'
-                    ? 'bg-violet-600 text-white shadow-sm'
-                    : 'text-zinc-400 hover:text-zinc-200'
+                  mode === 'signup' ? 'bg-violet-600 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 Create Account
@@ -375,9 +414,7 @@ export default function LoginPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               {mode === 'signup' && (
                 <div>
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                    Your Name
-                  </label>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-1.5">Your Name</label>
                   <div className="relative">
                     <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
                     <input
@@ -392,9 +429,7 @@ export default function LoginPage() {
               )}
 
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Work Email
-                </label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-1.5">Work Email</label>
                 <div className="relative">
                   <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
                   <input
@@ -409,9 +444,7 @@ export default function LoginPage() {
               </div>
 
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Password
-                </label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-1.5">Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
                   <input
