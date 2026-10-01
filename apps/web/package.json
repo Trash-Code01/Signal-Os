@@ -8,7 +8,8 @@
     "dev:prod": "node scripts/set-env.js production",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:auth": "node --test tests/auth.test.cjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

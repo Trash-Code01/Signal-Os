@@ -1,11 +1,13 @@
 #!/bin/bash
+set -euo pipefail
+
 echo "=== Devacia Lead OS Backend Starting ==="
 PORT="${PORT:-8000}"
 
-# Run alembic in background so port binding is instant and unblocked
-if [ -f "alembic.ini" ]; then
-    (alembic upgrade head || echo "Alembic background migration completed or skipped") &
-fi
+# Uvicorn's startup hooks initialize/upgrade the schema before accepting traffic.
+# Do not run Alembic concurrently: both paths alter the same auth/tenant tables,
+# which can race or deadlock and prevent the API from becoming ready.
+# Run any operator-requested Alembic upgrade separately, with writers stopped.
 
 # Start Celery worker in background if Redis is configured
 if [ -n "${REDIS_URL:-}" ]; then

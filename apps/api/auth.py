@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from google.oauth2 import id_token
 from google.auth.transport.requests import Request as GoogleRequest
+from functools import partial
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -132,7 +133,8 @@ def google_login(body: GoogleLogin, db: Session = Depends(get_db)):
         }
     else:
         try:
-            claims = id_token.verify_oauth2_token(body.credential, GoogleRequest(), client_id)
+            # Keep certificate retrieval within the frontend's authentication deadline.
+            claims = id_token.verify_oauth2_token(body.credential, partial(GoogleRequest(), timeout=10), client_id)
             if claims.get("iss") not in {"accounts.google.com", "https://accounts.google.com"} or claims.get("email_verified") is not True or claims.get("nonce") != body.nonce or not claims.get("sub"):
                 raise ValueError()
         except ValueError:

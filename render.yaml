@@ -7,6 +7,7 @@ services:
     plan: free
     region: ohio
     dockerCommand: "bash start.sh"
+    healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
