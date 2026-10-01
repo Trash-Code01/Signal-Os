@@ -1,4 +1,5 @@
 import os
+import re
 from . import runtime
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -6,13 +7,19 @@ from sqlalchemy.ext.declarative import declarative_base
 
 # PostgreSQL connection string
 raw_url = os.environ.get("DATABASE_URL", "postgresql://devacia:devacia_password@localhost:5432/devacia_os")
+if "channel_binding=" in raw_url:
+    raw_url = re.sub(r"([?&])channel_binding=[^&]+(&|$)", r"\1", raw_url)
+    raw_url = re.sub(r"[?&]$", "", raw_url)
+    if "?" not in raw_url and "&" in raw_url:
+        raw_url = raw_url.replace("&", "?", 1)
+
 if raw_url.startswith("postgres://"):
     raw_url = raw_url.replace("postgres://", "postgresql+psycopg://", 1)
 if raw_url.startswith("postgresql://"):
     raw_url = raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
 DATABASE_URL = raw_url
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite:") else {"connect_timeout": 10}
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite:") else {"connect_timeout": 15}
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,

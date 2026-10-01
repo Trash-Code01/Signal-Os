@@ -133,13 +133,17 @@ def health_check():
     The API serves auth and all other routes regardless of db transient state.
     """
     db_ok = False
+    db_err = None
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         db_ok = True
-    except Exception:
-        pass
-    return {"status": "ok", "db": "connected" if db_ok else "unreachable"}
+    except Exception as exc:
+        db_err = str(exc)
+    res = {"status": "ok", "db": "connected" if db_ok else "unreachable"}
+    if db_err:
+        res["db_error"] = db_err[:250]
+    return res
 
 
 @app.get("/api/environment")
