@@ -23,7 +23,7 @@ export default function CampaignsPage() {
     setLoading(true);
     try {
       const apiUrl = "";
-      const res = await fetch(`${apiUrl}/api/campaigns?status=${statusTab}`);
+      const res = await fetch(`${apiUrl}/api/campaigns?status=${statusTab}`, { credentials: 'include' });
       if (res.ok) {
         const data = (await res.json()) as CampaignRow[];
         setCampaigns(data);
@@ -76,6 +76,7 @@ export default function CampaignsPage() {
       await fetch(`${apiUrl}${endpoint}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ ids: selectedIds })
       });
       fetchCampaigns();

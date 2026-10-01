@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, text
 from worker import enrich_lead_contacts_task, process_campaign_task
 from core.database import get_db, engine
 from core.models import *
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import csv
 import hashlib
 import hmac
@@ -78,24 +78,26 @@ def startup_db_migrations():
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 );
             """))
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_campaigns_updated_at ON campaigns (updated_at)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_provider_health_provider_name ON provider_health (provider_name)"))
         print("Startup migration: schema columns and tables verified.")
     except Exception as exc:
         print(f"Startup migration warning (non-fatal): {exc}")
-    # Recover campaigns stranded in processing/pending when the Render free-tier backend
+    # Recover campaigns stranded in processing/pending/running when the Render free-tier backend
     # went to sleep mid-run (Celery worker dies with the container). Any campaign stuck
-    # > 30 minutes is safe to mark failed so the owner can start a new one.
+    # > 15 minutes is marked failed so the owner can immediately launch a new one.
     try:
         with engine.begin() as conn:
             result = conn.execute(text("""
                 UPDATE campaigns
-                SET status = 'failed', updated_at = NOW()
-                WHERE status IN ('processing', 'pending')
-                  AND updated_at < NOW() - INTERVAL '30 minutes'
+                SET status = 'failed'
+                WHERE status IN ('processing', 'pending', 'running')
+                  AND (created_at IS NULL OR created_at < NOW() - INTERVAL '15 minutes')
             """))
             stuck = result.rowcount
             if stuck:
-                print(f"Startup: reset {stuck} stuck campaign(s) from processing/pending to failed")
+                print(f"Startup: reset {stuck} stuck campaign(s) from processing/pending/running to failed")
     except Exception as exc:
         print(f"Startup: stuck-campaign recovery warning (non-fatal): {exc}")
     print("=== Application startup complete ===")
@@ -503,7 +505,16 @@ def _dispatch_task(task_func, *args, **kwargs):
         thread = threading.Thread(target=task_func, args=args, kwargs=kwargs, daemon=True)
         thread.start()
         return DummyTask()
-    return task_func.apply_async(args=list(args), kwargs=kwargs, queue="devacia_queue")
+    try:
+        return task_func.apply_async(args=list(args), kwargs=kwargs, queue="devacia_queue")
+    except Exception as exc:
+        print(f"Celery dispatch failed ({exc}); running task in background fallback thread.")
+        import threading
+        class FallbackTask:
+            id = f"fallback-thread-{args[0] if args else 'task'}"
+        thread = threading.Thread(target=task_func, args=args, kwargs=kwargs, daemon=True)
+        thread.start()
+        return FallbackTask()
 
 
 @app.post("/api/campaigns/{campaign_id}/resume", status_code=202)
@@ -513,6 +524,19 @@ def resume_campaign(campaign_id: int, db: Session = Depends(get_db), user: User 
         raise HTTPException(404, "Campaign not found")
     if campaign.status in {"pending", "processing", "running"}:
         raise HTTPException(409, "Campaign is already running")
+
+    # Auto-expire any of this user's campaigns stuck > 15 minutes
+    stuck_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    stuck_campaigns = db.query(Campaign).filter(
+        Campaign.owner_id == user.id,
+        Campaign.id != campaign.id,
+        Campaign.status.in_(("pending", "processing", "running")),
+        or_(Campaign.created_at.is_(None), Campaign.created_at < stuck_cutoff)
+    ).all()
+    for sc in stuck_campaigns:
+        sc.status = "failed"
+    if stuck_campaigns:
+        db.commit()
 
     qualified = db.query(Business.id).filter(
         Business.campaign_id == campaign_id,
@@ -582,6 +606,18 @@ def sync_sequences(db: Session = Depends(get_db)):
 
 def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
+        # Auto-expire any of this user's campaigns stuck in processing/pending/running > 15 minutes
+        stuck_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+        stuck_campaigns = db.query(Campaign).filter(
+            Campaign.owner_id == user.id,
+            Campaign.status.in_(("pending", "processing", "running")),
+            or_(Campaign.created_at.is_(None), Campaign.created_at < stuck_cutoff)
+        ).all()
+        for sc in stuck_campaigns:
+            sc.status = "failed"
+        if stuck_campaigns:
+            db.commit()
+
         active_campaigns = db.query(Campaign.id).filter(
             Campaign.owner_id == user.id,
             Campaign.status.in_(("pending", "processing", "running"))
@@ -635,9 +671,10 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Campaign could not be started")
+        print(f"Error creating campaign: {exc}")
+        raise HTTPException(status_code=500, detail=f"Campaign could not be started: {str(exc)[:120]}")
 
 CRM_STAGES = ("new", "reviewing", "contacted", "qualified", "needs_review", "proposal", "won", "lost", "archived")
 

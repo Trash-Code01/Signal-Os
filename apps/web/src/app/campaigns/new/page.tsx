@@ -83,15 +83,17 @@ export default function NewCampaignPage() {
     }
 
     const targetCities = parsedCities;
-    const campaignName =
+    const campaignName = (
       form.name.trim() ||
-      `${form.country} ${targetCities.join(', ')} ${selectedIndustry?.label || form.industry}`;
+      `${form.country} ${targetCities.join(', ')} ${selectedIndustry?.label || form.industry}`
+    ).slice(0, 120);
 
     try {
       const apiUrl = "";
       const res = await fetch(`${apiUrl}/api/campaigns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           name: campaignName,
           country: form.country,

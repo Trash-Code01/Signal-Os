@@ -150,7 +150,7 @@ function JobsContent() {
     setResuming(true);
     setResumeMessage('');
     try {
-      const response = await fetch(`/api/campaigns/${campaignId}/resume`, { method: 'POST' });
+      const response = await fetch(`/api/campaigns/${campaignId}/resume`, { method: 'POST', credentials: 'include' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Unable to continue this campaign');
       setCampaignStatus(data.status === 'completed' ? 'completed' : 'processing');
@@ -171,6 +171,7 @@ function JobsContent() {
       const response = await fetch(`/api/campaigns/${campaignId}/contact-options`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(options),
       });
       const data = await response.json();
@@ -203,7 +204,7 @@ function JobsContent() {
 
     const fetchStatus = async () => {
       try {
-        const res = await fetch(`/api/campaigns/${campaignId}/status`, { cache: 'no-store' });
+        const res = await fetch(`/api/campaigns/${campaignId}/status`, { cache: 'no-store', credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
           setStages(data.stages || PIPELINE_STAGES);
