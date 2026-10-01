@@ -43,7 +43,7 @@ export default function NewCampaignPage() {
     country: 'USA',
     state: '',
     cities: '',
-    industry: 'roofing',
+    industry: '',
     sub_industry: '',
     raw_target: 10,
     min_score: 60,
@@ -72,6 +72,12 @@ export default function NewCampaignPage() {
 
     if (!form.country.trim() || parsedCities.length === 0) {
       setError('Choose a country and add at least one target city. State / province is optional.');
+      setLoading(false);
+      return;
+    }
+
+    if (!form.industry.trim()) {
+      setError('Please select or specify an industry / vertical.');
       setLoading(false);
       return;
     }
@@ -217,7 +223,18 @@ export default function NewCampaignPage() {
             </div>
           </div>
           <div className="flex justify-end">
-            <button onClick={() => setStep(2)} className="w-full md:w-auto bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">
+            <button
+              onClick={() => {
+                const parsed = form.cities.split(',').map(c => c.trim()).filter(Boolean);
+                if (!form.country.trim() || parsed.length === 0) {
+                  setError('Choose a country and add at least one target city. State / province is optional.');
+                  return;
+                }
+                setError('');
+                setStep(2);
+              }}
+              className="w-full md:w-auto bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20"
+            >
               Next: Industry →
             </button>
           </div>
@@ -283,8 +300,20 @@ export default function NewCampaignPage() {
             )}
           </div>
           <div className="flex gap-3 md:justify-between">
-            <button onClick={() => setStep(1)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
-            <button onClick={() => setStep(3)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Targets →</button>
+            <button onClick={() => { setError(''); setStep(1); }} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
+            <button
+              onClick={() => {
+                if (!form.industry.trim()) {
+                  setError('Please select or specify an industry / vertical before proceeding.');
+                  return;
+                }
+                setError('');
+                setStep(3);
+              }}
+              className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20"
+            >
+              Next: Targets →
+            </button>
           </div>
         </div>
       )}
@@ -359,9 +388,9 @@ export default function NewCampaignPage() {
               <h3 className="text-xs text-zinc-400 uppercase tracking-wider mb-3">Campaign Summary</h3>
               <div className="grid grid-cols-2 gap-y-3 gap-x-4 text-sm bg-zinc-900/30 p-4 rounded-xl border border-zinc-800/50">
                 <span className="text-zinc-500">Location</span>
-                <span className="text-white text-right md:text-left truncate">{form.cities || 'Dallas'}, {form.state || 'Texas'}</span>
+                <span className="text-white text-right md:text-left truncate">{form.cities}{form.state ? `, ${form.state}` : ''}, {form.country}</span>
                 <span className="text-zinc-500">Industry</span>
-                <span className="text-white text-right md:text-left truncate">{selectedIndustry?.label} {form.sub_industry ? `(${form.sub_industry})` : ''}</span>
+                <span className="text-white text-right md:text-left truncate">{selectedIndustry?.label || form.industry || 'Not selected'} {form.sub_industry ? `(${form.sub_industry})` : ''}</span>
                 <span className="text-zinc-500">Qualified target</span>
                 <span className="text-white text-right md:text-left">{form.raw_target.toLocaleString()}</span>
                 <span className="text-zinc-500">Min score</span>
