@@ -101,6 +101,23 @@ def startup_db_migrations():
     except Exception as exc:
         print(f"Startup: stuck-campaign recovery warning (non-fatal): {exc}")
     print("=== Application startup complete ===")
+    # ── Keep-alive self-ping (Render free tier sleeps after 15 min idle) ──────
+    # Only runs when ENVIRONMENT=production AND RENDER_EXTERNAL_URL is available.
+    import threading, time, urllib.request
+    _self_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+    if os.environ.get("ENVIRONMENT") == "production" and _self_url:
+        _ping_url = f"{_self_url.rstrip('/')}/api/health"
+        def _keepalive():
+            while True:
+                time.sleep(600)  # ping every 10 minutes
+                try:
+                    urllib.request.urlopen(_ping_url, timeout=10)
+                    print(f"Keep-alive ping OK: {_ping_url}")
+                except Exception as _e:
+                    print(f"Keep-alive ping failed: {_e}")
+        _t = threading.Thread(target=_keepalive, daemon=True, name="keepalive")
+        _t.start()
+        print(f"Keep-alive thread started → {_ping_url}")
 
 
 @app.exception_handler(Exception)
