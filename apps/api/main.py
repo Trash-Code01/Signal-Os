@@ -82,6 +82,22 @@ def startup_db_migrations():
         print("Startup migration: schema columns and tables verified.")
     except Exception as exc:
         print(f"Startup migration warning (non-fatal): {exc}")
+    # Recover campaigns stranded in processing/pending when the Render free-tier backend
+    # went to sleep mid-run (Celery worker dies with the container). Any campaign stuck
+    # > 30 minutes is safe to mark failed so the owner can start a new one.
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE campaigns
+                SET status = 'failed', updated_at = NOW()
+                WHERE status IN ('processing', 'pending')
+                  AND updated_at < NOW() - INTERVAL '30 minutes'
+            """))
+            stuck = result.rowcount
+            if stuck:
+                print(f"Startup: reset {stuck} stuck campaign(s) from processing/pending to failed")
+    except Exception as exc:
+        print(f"Startup: stuck-campaign recovery warning (non-fatal): {exc}")
     print("=== Application startup complete ===")
 
 
@@ -491,7 +507,7 @@ def _dispatch_task(task_func, *args, **kwargs):
 
 
 @app.post("/api/campaigns/{campaign_id}/resume", status_code=202)
-def resume_campaign(campaign_id: int, db: Session = Depends(get_db)):
+def resume_campaign(campaign_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id, Campaign.deleted_at.is_(None)).first()
     if not campaign:
         raise HTTPException(404, "Campaign not found")
@@ -510,6 +526,7 @@ def resume_campaign(campaign_id: int, db: Session = Depends(get_db)):
         return {"status": "completed", "campaign_id": campaign.id, "remaining": 0}
 
     active_campaigns = db.query(Campaign.id).filter(
+        Campaign.owner_id == user.id,
         Campaign.id != campaign.id,
         Campaign.status.in_(("pending", "processing", "running")),
     ).count()
@@ -565,7 +582,10 @@ def sync_sequences(db: Session = Depends(get_db)):
 
 def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     try:
-        active_campaigns = db.query(Campaign.id).filter(Campaign.status.in_(("pending", "processing", "running"))).count()
+        active_campaigns = db.query(Campaign.id).filter(
+            Campaign.owner_id == user.id,
+            Campaign.status.in_(("pending", "processing", "running"))
+        ).count()
         if active_campaigns >= 3:
             raise HTTPException(status_code=429, detail="Finish an active campaign before starting another one")
         # Create industry config if it doesn't exist

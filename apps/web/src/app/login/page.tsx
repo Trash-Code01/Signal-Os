@@ -51,6 +51,9 @@ export default function LoginPage() {
   const googleBtnRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // nonceRef keeps the GIS callback in sync with the latest fetched nonce even
+  // if config state updates after GIS was already initialized (closure fix).
+  const nonceRef = useRef('');
 
   const [scriptReady, setScriptReady] = useState(false);
   const [config, setConfig] = useState<{ client_id: string; nonce: string } | null>(null);
@@ -82,6 +85,7 @@ export default function LoginPage() {
           throw new Error('Google sign-in is unavailable. Please retry.');
         }
         if (active) {
+          nonceRef.current = data.nonce;
           setConfig({ client_id: data.client_id, nonce: data.nonce });
           setWarmingUp(false);
           setAutoRetryCount(0);
@@ -140,7 +144,10 @@ export default function LoginPage() {
             await authRequest('/api/auth/google', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ credential, nonce: config.nonce }),
+              // Use nonceRef.current (not config.nonce closure) so we always
+              // send the nonce that matches the current cookie even if config
+              // was refreshed after a cold-start retry.
+              body: JSON.stringify({ credential, nonce: nonceRef.current }),
             });
             window.location.replace('/dashboard');
           } catch (reason) {
