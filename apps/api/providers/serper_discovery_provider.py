@@ -102,10 +102,9 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         print(f"Serper discovering: {query} in {location} for {industry}")
 
         if not self.api_key:
-            print("Serper API key missing. Falling back to MockDiscoveryProvider so campaign delivers sample leads.")
-            report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing. Using fallback discovery.")
-            from .mock_discovery import MockDiscoveryProvider
-            return await MockDiscoveryProvider().discover(query, location, industry, limit)
+            print("Serper API key missing. Live discovery cannot continue.")
+            report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing. Live campaigns never fall back to synthetic leads.")
+            return []
 
         target_city, target_state, target_country = _parse_target_location(location)
         if not target_city or not target_country:
@@ -147,9 +146,8 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                                 state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
                                 report_provider_state("serper", state, f"Business discovery failed ({response.status}).", response.status)
                                 if not places:
-                                    print("Serper failed on initial query. Falling back to MockDiscoveryProvider.")
-                                    from .mock_discovery import MockDiscoveryProvider
-                                    return await MockDiscoveryProvider().discover(query, location, industry, limit)
+                                    print("Serper failed on initial live query. Returning no live results.")
+                                    return []
                                 break
 
                             page_places = data.get("places", [])

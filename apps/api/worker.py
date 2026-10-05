@@ -430,17 +430,25 @@ def _qualify_no_website_business(db, business: Business) -> int:
     )
     db.add(opportunity)
     db.flush()
+    no_website_score = ScoringEngine().calculate_no_website_score({
+        "industry": business.industry,
+        "primary_phone": business.primary_phone,
+        "review_count": business.review_count,
+        "rating": business.rating,
+        "google_place_id": business.google_place_id,
+        "has_decision_maker": False,
+    })
     db.add(Score(
         business_id=business.id,
-        commercial_score=100,
-        data_confidence=80,
-        grade="A+",
-        business_fit=100,
-        digital_gap=100,
-        offer_fit=100,
-        buying_intent=80,
-        contactability=50 if business.primary_phone else 20,
-        score_version="v2-no-website",
+        commercial_score=no_website_score["commercial_score"],
+        data_confidence=no_website_score["data_confidence"],
+        grade=no_website_score["grade"],
+        business_fit=no_website_score["business_fit"],
+        digital_gap=no_website_score["digital_gap"],
+        offer_fit=no_website_score["offer_fit"],
+        buying_intent=no_website_score["buying_intent"],
+        contactability=no_website_score["contactability"],
+        score_version=ScoringEngine.VERSION,
     ))
     db.add(AIAnalysis(
         business_id=business.id,
@@ -460,17 +468,31 @@ def _qualify_no_website_business(db, business: Business) -> int:
         saved_contacts += int(_save_contact(db, business.id, contact))
 
     has_contact = (saved_contacts > 0) or bool(business.primary_phone) or _has_actionable_contact(db, business)
-    final_status = "qualified" if has_contact else "needs_contact_enrichment"
+    min_quality_score = max(0, min(int(campaign.min_quality_score or 80), 100)) if campaign else 80
+    meets_quality_bar = no_website_score["commercial_score"] >= min_quality_score
+    if not has_contact:
+        final_status = "needs_contact_enrichment"
+    elif not meets_quality_bar:
+        final_status = "below_quality_threshold"
+    else:
+        final_status = "qualified"
     _set_business_status(db, business, final_status)
 
     db.add(CRMActivity(
         business_id=business.id,
         activity_type=final_status,
         body=(
-            "Qualified as a no-website opportunity. Public contact research found "
-            f"{saved_contacts} new decision-maker record(s); the business phone remains available as a fallback."
-            if has_contact else
-            "No official website and no callable contact found. Routed to needs review."
+            (
+                "Qualified as a no-website opportunity. Public contact research found "
+                f"{saved_contacts} new decision-maker record(s); the business phone remains available as a fallback."
+                if final_status == "qualified"
+                else (
+                    f"No official website, but commercial score {no_website_score['commercial_score']}/100 "
+                    f"is below the campaign threshold {min_quality_score}/100."
+                    if has_contact
+                    else "No official website and no callable contact found. Routed to needs review."
+                )
+            )
         ),
         created_by="Lead Intelligence",
     ))
@@ -798,11 +820,18 @@ def process_campaign_task(campaign_id: int):
             public_emails = sorted({email.lower().strip() for email in audit.get("emails") or [] if email})
             _save_public_website_contacts(db, business, audit)
 
+            has_named_decision_maker = any(
+                contact.first_name and contact.last_name and contact.contact_type == "professional"
+                for contact in db.query(DecisionMaker).filter(DecisionMaker.business_id == business.id).all()
+            )
             score_result = scorer.calculate_score({
+                "industry": business.industry,
                 "primary_phone": business.primary_phone,
                 "website_url": business.website_url,
                 "website_email": public_emails[0] if public_emails else None,
                 "review_count": business.review_count,
+                "rating": business.rating,
+                "has_decision_maker": has_named_decision_maker,
             }, audit)
             score = db.query(Score).filter(Score.business_id == business.id).order_by(Score.id.desc()).first()
             if not score:
@@ -849,10 +878,11 @@ def process_campaign_task(campaign_id: int):
             # We will just mark low confidence as "needs_research" after saving.
             is_low_confidence = diagnosis.get("confidence") not in {"high", "medium"}
 
-            # Clean up old records before creating new ones on a re-run
+            # Clean up AI-generated records before creating new ones on a re-run.
+            # Keep the deterministic Score record calculated above; deleting it here
+            # made qualified leads lose the very score used to qualify them.
             db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
             db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
-            db.query(Score).filter(Score.business_id == business.id).delete()
             
             opportunity = Opportunity(
 
