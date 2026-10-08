@@ -22,11 +22,11 @@ const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
-    // Next.js route handlers in src/app/api/auth/* handle all /api/auth/* requests.
-    // Only non-auth /api/* requests are proxied to the FastAPI backend.
+    // Next.js route handlers in src/app/api/auth/* handle google, login, and logout requests.
+    // All other /api/* requests (including /api/auth/users) are proxied to the FastAPI backend.
     return [
       {
-        source: '/api/((?!auth/).*)',
+        source: '/api/:path((?!auth/google|auth/login|auth/logout).*)',
         destination: `${apiUrl}/api/:path*`,
       },
     ];
