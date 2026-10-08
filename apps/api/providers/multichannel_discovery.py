@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 from core.discovery import CHANNELS, candidate_priority
+from core.provider_health import report_provider_state, provider_failure
 from core.deduplication import DeduplicationEngine
 from core.lead_quality import clean_website_url, clean_phone_for_country
 from .serper_discovery_provider import SerperDiscoveryProvider, _parse_target_location
@@ -79,8 +80,11 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
                     'q': f'{query} in {location} {CHANNEL_QUERIES[channel]}', 'num': 10, 'page': page,
                 }) as response:
                     if response.status != 200:
-                        raise RuntimeError(f'{channel} search failed ({response.status})')
+                        state, message = provider_failure(response.status, await response.text())
+                        report_provider_state('serper', state, message, response.status)
+                        raise RuntimeError(f'{channel}: {message}')
                     payload = await response.json()
+                    report_provider_state('serper', 'active', 'Public business search completed.', response.status)
                 organic = payload.get('organic') or []
                 fresh = [r for r in organic if r.get('link') not in seen]
                 if not fresh:
@@ -119,5 +123,6 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
                 successes += 1
                 candidates.extend(batch)
         if not successes:
-            raise RuntimeError('All selected discovery channels failed. Check provider configuration and retry.')
+            reasons = '; '.join(dict.fromkeys(str(batch) for batch in batches if isinstance(batch, Exception)))
+            raise RuntimeError(f'All selected discovery channels failed. {reasons}')
         return sorted(DeduplicationEngine().deduplicate(candidates), key=candidate_priority, reverse=True)[:limit]

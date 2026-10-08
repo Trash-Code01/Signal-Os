@@ -17,7 +17,7 @@ export async function authRequest(
   init.signal?.addEventListener('abort', cancel, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, cache: 'no-store', signal: controller.signal });
+    const response = await fetch(url, { ...init, cache: 'no-store', credentials: 'include', signal: controller.signal });
     const text = await response.text();
     let data: Record<string, unknown>;
     try {

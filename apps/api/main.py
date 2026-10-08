@@ -208,17 +208,19 @@ def get_providers_status(db: Session = Depends(get_db)):
         all_configured = all(bool(os.environ.get(k, "").strip()) for k in p["keys"])
         recorded = db_states.get(pid)
 
-        if IS_STAGING:
+        if IS_STAGING and os.getenv('DISCOVERY_MODE', '').strip().lower() != 'live':
             state, msg, http_status, action_req = "mock", "Disabled in staging; no paid provider requests.", None, False
+        elif not all_configured:
+            state, msg, http_status, action_req = 'not_configured', 'Missing API credentials.', None, True
         elif recorded:
             state = recorded["state"]
             msg = recorded["message"] or ("Configured and operational" if all_configured else "Missing API credentials")
             http_status = recorded["last_http_status"]
-            action_req = state in ["error", "cooldown", "rate_limited"]
+            action_req = state in ['error', 'cooldown', 'rate_limited', 'exhausted', 'invalid_key', 'unavailable', 'not_configured']
         else:
-            state = "active" if all_configured else "unconfigured"
-            msg = "Configured and operational" if all_configured else "API key not set in environment"
-            http_status = 200 if all_configured else None
+            state = 'configured'
+            msg = 'Credentials configured; no successful live request recorded yet.'
+            http_status = None
             action_req = False
 
         results.append({
@@ -402,7 +404,8 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
 
     # Stage statuses are independent; each reflects its own data and campaign state.
     discovery_status = (
-        "done" if discovered >= total_target
+        "failed" if campaign.status == 'failed' and discovered == 0
+        else "done" if discovered >= total_target
         else "partial" if is_terminal and discovered > 0
         else "running" if is_running
         else "pending"
@@ -1167,7 +1170,7 @@ def update_crm_lead(lead_id: int, payload: CRMLeadUpdate, db: Session = Depends(
     if "stage" in payload.model_fields_set and payload.stage is not None:
         crm_lead.stage = _normalise_stage(payload.stage)
     if "owner_name" in payload.model_fields_set:
-        crm_lead.owner_name = payload.owner_name.strip() or None
+        crm_lead.owner_name = (payload.owner_name or '').strip() or None
     if "tags" in payload.model_fields_set:
         crm_lead.tags = _normalise_tags(payload.tags)
     if "next_follow_up_at" in payload.model_fields_set:
@@ -1183,7 +1186,6 @@ def bulk_update_crm_leads(payload: CRMLeadBulkUpdate, db: Session = Depends(get_
     if not lead_ids:
         raise HTTPException(status_code=400, detail="Select at least one lead")
     stage = _normalise_stage(payload.stage)
-    _ensure_crm_records(db)
     records = db.query(CRMLead).filter(CRMLead.business_id.in_(lead_ids)).all()
     for record in records:
         record.stage = stage
@@ -1332,6 +1334,8 @@ async def import_crm_leads(file: UploadFile = File(...), db: Session = Depends(g
             imported_rows = json.loads(text)
             if not isinstance(imported_rows, list):
                 raise ValueError("JSON must contain an array of lead objects")
+            if any(not isinstance(row, dict) for row in imported_rows):
+                raise ValueError("Every JSON row must be a lead object")
         else:
             delimiter = "\t" if extension == "tsv" else ","
             if extension == "txt":
@@ -1353,7 +1357,7 @@ async def import_crm_leads(file: UploadFile = File(...), db: Session = Depends(g
         score_value = _import_value(row, "commercial_score", "score")
         try:
             score = int(float(score_value)) if score_value else None
-        except ValueError:
+        except (ValueError, OverflowError):
             score = None
         try:
             _, created = _create_crm_lead(CRMLeadCreate(
@@ -1395,7 +1399,7 @@ def _crm_export_rows(leads: List[dict]) -> tuple[List[str], List[List[str]]]:
         "Owner", "Tags", "Campaign", "Primary problem", "Recommended offer",
         "Primary contact", "Primary contact title", "Primary contact email", "Primary contact phone",
         "All emails", "Website emails", "Apollo emails", "All phones", "LinkedIn profiles",
-        "Next follow-up"
+        "Next follow-up", "Website status", "Discovery sources", "Listing phone"
     ]
     rows = []
     for lead in leads:
@@ -1410,7 +1414,8 @@ def _crm_export_rows(leads: List[dict]) -> tuple[List[str], List[List[str]]]:
             c.get("email") for c in contacts
             if c.get("email") and "apollo" in (c.get("source") or "").lower()
         })
-        all_phones = sorted({c.get("phone") for c in contacts if c.get("phone")})
+        listing_phone = lead.get("listing_phone") or lead.get("phone")
+        all_phones = sorted({c.get("phone") for c in contacts if c.get("phone")} | ({listing_phone} if listing_phone else set()))
         linkedin_profiles = sorted({c.get("linkedin_url") for c in contacts if c.get("linkedin_url")})
         rows.append([_safe_export_cell(value) for value in [
             lead["name"], lead["website_url"], lead["stage"], lead["commercial_score"], lead["grade"],
@@ -1419,6 +1424,10 @@ def _crm_export_rows(leads: List[dict]) -> tuple[List[str], List[List[str]]]:
             contact.get("name"), contact.get("title"), contact.get("email"), contact.get("phone"),
             "; ".join(all_emails), "; ".join(website_emails), "; ".join(apollo_emails),
             "; ".join(all_phones), "; ".join(linkedin_profiles), lead["next_follow_up_at"],
+            lead.get("website_status"), "; ".join(
+                f"{source.get('channel', '')}: {source.get('url') or ''}".rstrip(': ')
+                for source in lead.get("discovery_sources") or []
+            ), listing_phone,
         ]])
     return header, rows
 
@@ -1440,6 +1449,7 @@ def export_crm_leads(
     header, rows = _crm_export_rows(data["leads"])
     delimiter = "\t" if export_format == "tsv" else ","
     csv.writer(output, delimiter=delimiter).writerows([header, *rows])
+    output.seek(0)
     extension = "tsv" if export_format == "tsv" else "csv"
     media_type = "text/tab-separated-values" if export_format == "tsv" else "text/csv"
     return StreamingResponse(output, media_type=media_type, headers={"Content-Disposition": f"attachment; filename=devacia-leads.{extension}"})
@@ -1448,18 +1458,21 @@ def export_crm_leads(
 def get_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Fetch aggregated stats for the dashboard (scoped to the authenticated user)."""
     db.info["owner_id"] = user.id
-    total_campaigns = db.query(Campaign).filter(Campaign.owner_id == user.id).count()
-    total_businesses = db.query(Business).filter(Business.owner_id == user.id).count()
-    total_opportunities = db.query(Opportunity).filter(Opportunity.owner_id == user.id).count()
+    active_campaigns = db.query(Campaign).filter(Campaign.owner_id == user.id, Campaign.deleted_at.is_(None))
+    active_businesses = db.query(Business).filter(Business.owner_id == user.id, Business.deleted_at.is_(None))
+    qualified_businesses = active_businesses.filter(Business.status == 'qualified')
+    total_campaigns = active_campaigns.count()
+    total_businesses = active_businesses.count()
+    total_opportunities = qualified_businesses.count()
     
     # Calculate average score (scoped to user's businesses)
-    user_business_ids = [b.id for b in db.query(Business.id).filter(Business.owner_id == user.id).all()]
+    user_business_ids = [b.id for b in active_businesses.all()]
     scores = db.query(Score.commercial_score).filter(Score.business_id.in_(user_business_ids)).all() if user_business_ids else []
     avg_score = sum([s[0] for s in scores]) / len(scores) if scores else 0
     
     a_plus = len([s for s in scores if s[0] >= 90])
     
-    recent_campaigns = db.query(Campaign).filter(Campaign.owner_id == user.id).order_by(Campaign.created_at.desc()).limit(5).all()
+    recent_campaigns = active_campaigns.order_by(Campaign.created_at.desc()).limit(5).all()
     
     formatted_recent = []
     from core.models import CampaignLocation
@@ -1470,21 +1483,28 @@ def get_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_
             "name": c.name, 
             "status": c.status, 
             "target": c.target_quantity, 
-            "progress": min(c.target_quantity, total_opportunities), 
+            "progress": min(c.target_quantity, qualified_businesses.filter(Business.campaign_id == c.id).count()),
             "country": loc.country if loc else "USA", 
             "city": loc.city if loc else "Dallas", 
             "industry": c.industry.name if c.industry else ""
         })
         
-    # Generate 7-day trailing chart data (mocked for visual shape but dynamically scaled)
-    # In a real scenario, this groups opportunities by created_at.
-    import datetime
+    # Actual qualified opportunities created per UTC day; an empty account stays at zero.
+    today = datetime.now(timezone.utc).date()
+    since = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc)
+    opportunity_dates = (
+        db.query(Opportunity.created_at).join(Business)
+        .filter(Business.owner_id == user.id, Business.deleted_at.is_(None), Business.status == 'qualified', Opportunity.created_at >= since)
+        .all()
+    )
+    daily_counts = {}
+    for (created_at,) in opportunity_dates:
+        day = created_at.date()
+        daily_counts[day] = daily_counts.get(day, 0) + 1
     chart_data = []
     for i in range(7):
-        day = (datetime.datetime.now() - datetime.timedelta(days=6 - i)).strftime("%a")[0]
-        # mock variation based on total_opportunities
-        val = total_opportunities + (i * 10) + (10 if i % 2 == 0 else 0)
-        chart_data.append({"day": day, "value": val})
+        day = today - timedelta(days=6 - i)
+        chart_data.append({"day": day.strftime("%a")[0], "value": daily_counts.get(day, 0)})
         
     # Fetch top priority opportunities (top 3 by score, scoped to user)
     top_scores = db.query(Score).filter(Score.business_id.in_(user_business_ids)).order_by(Score.commercial_score.desc()).limit(3).all() if user_business_ids else []
@@ -1968,7 +1988,7 @@ CRITICAL RULES:
         import requests
 
         groq_provider = GroqProvider()
-        api_key = "" if IS_STAGING else groq_provider.api_key
+        api_key = groq_provider.api_key
         if api_key:
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -1994,7 +2014,12 @@ CRITICAL RULES:
                 data = resp.json()
                 email_text = data["choices"][0]["message"]["content"] or ""
                 source = "groq"
+                from core.provider_health import report_provider_state
+                report_provider_state("groq", "active", "Email draft generated.", 200)
             else:
+                from core.provider_health import provider_failure, report_provider_state
+                state, message = provider_failure(resp.status_code, resp.text)
+                report_provider_state("groq", state, message, resp.status_code)
                 err_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
                 print(f"Groq API error for lead {lead_id}: {err_msg}")
     except Exception as exc:

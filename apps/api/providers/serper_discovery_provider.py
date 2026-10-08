@@ -5,7 +5,7 @@ import re
 import urllib.parse
 from typing import List, Dict, Any, Optional
 from core.providers import BusinessDiscoveryProvider
-from core.provider_health import report_provider_state
+from core.provider_health import report_provider_state, provider_failure
 from core.lead_quality import canonical_country, clean_phone_for_country, clean_website_url, JUNK_WEBSITE_DOMAINS
 
 def _is_junk_website(url) -> bool:
@@ -132,11 +132,10 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                             data = await response.json()
 
                             if response.status != 200:
-                                print(f"Serper error {response.status}: {data}")
-                                state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
-                                report_provider_state("serper", state, f"Business discovery failed ({response.status}).", response.status)
+                                state, message = provider_failure(response.status, data)
+                                report_provider_state("serper", state, message, response.status)
                                 if not places:
-                                    raise RuntimeError(f"Live discovery failed ({response.status}).")
+                                    raise RuntimeError(message)
                                 break
 
                             page_places = data.get("places", [])
@@ -226,6 +225,6 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         except Exception as e:
             print(f"Serper discovery error: {e}")
             if not raw_businesses:
-                raise RuntimeError("Google Maps discovery unavailable; retry after checking provider health.") from e
+                raise RuntimeError(f"Google Maps discovery unavailable: {e}") from e
 
         return raw_businesses

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import aiohttp
-from core.provider_health import report_provider_state
+from core.provider_health import report_provider_state, provider_failure
 
 class SerperSearchProvider:
     """Public Google-result fallback for decision-maker discovery."""
@@ -42,17 +42,18 @@ class SerperSearchProvider:
             queries = [f'"{business_name}" "{location}" (owner OR founder OR CEO) ({fields})']
         contacts: List[Dict[str, Any]] = []
         headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
-        async with aiohttp.ClientSession(headers=headers) as session:
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
             for query in queries:
                 try:
                     async with session.post(self.base_url, json={"q": query, "num": 10}) as response:
                         if response.status != 200:
-                            state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
-                            report_provider_state("serper", state, f"Public decision-maker search failed ({response.status}).", response.status)
+                            state, message = provider_failure(response.status, await response.text())
+                            report_provider_state("serper", state, message, response.status)
                             continue
                         payload = await response.json()
                         report_provider_state("serper", "active", "Public decision-maker search completed.", response.status)
                 except Exception:
+                    report_provider_state("serper", "unavailable", "Public contact lookup could not complete.")
                     continue
                 for result in payload.get("organic") or []:
                     contact = self._extract_person(

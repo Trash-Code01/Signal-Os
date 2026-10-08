@@ -1,7 +1,7 @@
 from core.runtime import IS_STAGING
 import os
 import json
-import time
+import asyncio
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from core.provider_health import report_provider_state
@@ -48,7 +48,8 @@ class GroqProvider:
     MODEL = "qwen/qwen3.8-27b"   # Best reasoning model on this Groq account, avoids OTPM limits
 
     def __init__(self):
-        self.api_key = "" if IS_STAGING else os.environ.get("GROQ_API_KEY", "").strip()
+        self.live_enabled = not IS_STAGING or os.getenv('DISCOVERY_MODE', '').strip().lower() == 'live'
+        self.api_key = os.environ.get("GROQ_API_KEY", "").strip() if self.live_enabled else ''
         self.model_name = os.environ.get("GROQ_MODEL", self.MODEL)
         self._client = None
 
@@ -96,7 +97,10 @@ Analyze this business and return the JSON dossier:"""
             return None
 
         prompt = self._build_prompt(evidence, industry_config)
-        if IS_STAGING:
+        if not self.live_enabled:
+            return None
+        if not self.api_key:
+            report_provider_state('groq', 'not_configured', 'GROQ_API_KEY is missing.')
             return None
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -154,7 +158,7 @@ Analyze this business and return the JSON dossier:"""
                 if attempt < 2 and ("429" in err_str or "rate_limit" in err_str.lower() or "rate limit" in err_str.lower()):
                     wait = 10 * (attempt + 1)
                     print(f"GroqProvider: Rate limited. Waiting {wait}s before retry...")
-                    time.sleep(wait)
+                    await asyncio.sleep(wait)
                     continue
                 return None
 

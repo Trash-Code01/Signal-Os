@@ -8,6 +8,18 @@ from .database import SessionLocal
 from .models import ProviderHealth
 
 
+def provider_failure(http_status: int, body: object = None) -> tuple[str, str]:
+    """Translate upstream failures without echoing provider response secrets."""
+    text = str(body or '').lower()
+    if http_status == 402 or any(term in text for term in ('not enough credits', 'insufficient credits', 'ran out of credits', 'quota exceeded', 'insufficient_quota')):
+        return 'exhausted', 'Provider credits exhausted. Replenish the account and retry.'
+    if http_status == 429:
+        return 'cooldown', 'Provider rate limit reached. Retry after the cooldown.'
+    if http_status in (401, 403):
+        return 'invalid_key', 'Provider rejected the credentials or account permissions.'
+    return 'unavailable', f'Provider request failed (HTTP {http_status}).'
+
+
 def report_provider_state(
     provider_name: str,
     state: str,

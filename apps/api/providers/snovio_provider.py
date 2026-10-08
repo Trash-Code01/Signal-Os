@@ -3,7 +3,7 @@ import os
 import aiohttp
 from typing import List, Dict, Any, Optional
 from core.providers import EmailProvider
-from core.provider_health import report_provider_state
+from core.provider_health import report_provider_state, provider_failure
 
 class SnovioProvider(EmailProvider):
     def __init__(self, db_session=None):
@@ -20,7 +20,7 @@ class SnovioProvider(EmailProvider):
             print("SnovioProvider: credentials are not configured. Skipping enrichment.")
             report_provider_state("snovio", "not_configured", "SNOVIO_CLIENT_ID or SNOVIO_CLIENT_SECRET is missing.")
             return None
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             data = {
                 "grant_type": "client_credentials",
                 "client_id": self.client_id,
@@ -33,8 +33,8 @@ class SnovioProvider(EmailProvider):
                     report_provider_state("snovio", "active", "Credentials accepted.", resp.status)
                     return self._token
                 response_text = (await resp.text())[:180]
-                state = "invalid_key" if resp.status in (400, 401) else "cooldown" if resp.status == 429 else "exhausted" if resp.status in (402, 403) else "unavailable"
-                report_provider_state("snovio", state, f"Token request failed ({resp.status}): {response_text}", resp.status)
+                state, message = provider_failure(resp.status, response_text)
+                report_provider_state("snovio", state, message, resp.status)
         return None
 
     async def find_emails(self, domain: str, name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -43,7 +43,7 @@ class SnovioProvider(EmailProvider):
             return []
             
         contacts = []
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             # Domain search
             url = f"{self.base_url}/v2/domain-emails-with-info"
             params = {
@@ -70,6 +70,6 @@ class SnovioProvider(EmailProvider):
                         })
                 else:
                     response_text = (await resp.text())[:180]
-                    state = "cooldown" if resp.status == 429 else "exhausted" if resp.status in (402, 403) else "invalid_key" if resp.status == 401 else "unavailable"
-                    report_provider_state("snovio", state, f"Domain email search failed ({resp.status}): {response_text}", resp.status)
+                    state, message = provider_failure(resp.status, response_text)
+                    report_provider_state("snovio", state, message, resp.status)
         return contacts

@@ -103,6 +103,9 @@ def _page_type(url: str) -> str:
 
 def _set_business_status(db, business, status: str):
     business.status = status
+    # Stamp pending research records with the account before the scoped CRM
+    # repair. Otherwise this flush can leave AI analysis ownership unset.
+    db.flush()
     previous_system_access = db.info.get('system_access')
     db.info["system_access"] = True
     try:
@@ -592,6 +595,7 @@ def process_campaign_task(campaign_id: int):
     """Run live discovery and admit only research-backed, contactable leads into the CRM."""
     db = SessionLocal()
     job: Optional[JobRun] = None
+    provider = None
     try:
         campaign = load_owned_job(db, Campaign, campaign_id)
         if not campaign:
@@ -969,6 +973,7 @@ def process_campaign_task(campaign_id: int):
                 current_job.status = "failed"
                 current_job.completed_at = datetime.now(timezone.utc)
                 current_job.error_message = str(exc)[:2000]
+                current_job.metrics = {**(current_job.metrics or {}), 'channel_errors': getattr(provider, 'channel_errors', {})}
         db.commit()
         return {"status": "failed", "error": str(exc)}
     finally:
