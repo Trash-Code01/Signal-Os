@@ -12,7 +12,7 @@ export default function DashboardPage() {
     async function fetchStats() {
       try {
         const apiUrl = "";
-        const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store' });
+        const res = await fetch(`${apiUrl}/api/dashboard`, { cache: 'no-store', credentials: 'include' });
         if (res.ok) {
           setData(await res.json());
         }

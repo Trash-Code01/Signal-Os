@@ -20,13 +20,14 @@ class FixtureDiscoveryProvider(BusinessDiscoveryProvider):
             data = json.load(f)
             return data[:limit] if limit else data
 
-def get_discovery_provider() -> BusinessDiscoveryProvider:
+def get_discovery_provider(channels=None) -> BusinessDiscoveryProvider:
     # Live discovery is the safe production default. Mock and fixture data must
     # be explicitly opted into so it can never silently appear in a sales CRM.
     mode = os.environ.get("DISCOVERY_MODE", "live").strip().lower()
 
     if mode == "live":
-        return SerperDiscoveryProvider()
+        from .multichannel_discovery import MultiChannelDiscoveryProvider
+        return MultiChannelDiscoveryProvider(channels or ['google_maps'])
     if mode == "fixture":
         return FixtureDiscoveryProvider()
     if mode == "mock":

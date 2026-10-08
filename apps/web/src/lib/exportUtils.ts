@@ -4,6 +4,8 @@ export interface LeadExportData {
   id: number;
   name: string;
   website_url?: string | null;
+  website_status?: string;
+  discovery_sources?: Array<{ channel: string; url?: string | null }>;
   industry?: string | null;
   location?: string | null;
   city?: string | null;
@@ -102,6 +104,9 @@ export function formatLeadsForExport(leads: LeadExportData[]) {
       'Data Mode': (lead.data_mode || 'live').toUpperCase(),
       'Company Name': lead.name || '',
       'Website': lead.website_url || '',
+      'Website Status': lead.website_status || (lead.website_url ? 'has_website' : 'unknown'),
+      'Discovery Channels': [...new Set((lead.discovery_sources || []).map(source => source.channel))].join('; '),
+      'Discovery Sources': (lead.discovery_sources || []).map(source => source.url).filter(Boolean).join('; '),
       'Industry': lead.industry || '',
       'Location': lead.location || `${lead.city || ''}${lead.city && lead.country ? ', ' : ''}${lead.country || ''}`,
       'City': lead.city || '',

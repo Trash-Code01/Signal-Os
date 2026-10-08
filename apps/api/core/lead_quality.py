@@ -98,6 +98,7 @@ def clean_phone_for_country(value: Optional[str], country: Optional[str]) -> Opt
 
 
 JUNK_WEBSITE_DOMAINS = {
+    "justdial.com",
     "wikipedia.org", "yelp.com", "facebook.com", "tripadvisor.com", "instagram.com",
     "linkedin.com", "google.com", "doordash.com", "ubereats.com", "grubhub.com",
     "yellowpages.com", "angi.com", "houzz.com", "thumbtack.com", "homeadvisor.com",
@@ -159,6 +160,8 @@ def clean_website_url(value: Optional[str]) -> Optional[str]:
         parsed = urllib.parse.urlsplit(raw)
     except Exception:
         return None
+    if parsed.scheme not in {'http', 'https'} or parsed.username or parsed.password:
+        return None
 
     hostname = (parsed.hostname or "").rstrip(".").lower()
     if not hostname or "." not in hostname:
@@ -194,4 +197,3 @@ def clean_website_url(value: Optional[str]) -> Optional[str]:
     result = urllib.parse.urlunsplit((scheme, netloc, path, clean_query, ""))
     # Ensure no trailing slash for consistent display and deduplication
     return result.rstrip("/")
-

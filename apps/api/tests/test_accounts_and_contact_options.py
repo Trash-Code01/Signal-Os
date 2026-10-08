@@ -218,6 +218,9 @@ def test_live_worker_uses_reserve_candidates_to_deliver_target(setup, monkeypatc
                     'state_province': 'Texas',
                     'country': 'USA',
                     'source_metadata': {'source': 'qa_provider'},
+                    'website_status': 'no_website',
+                    'review_count': 100,
+                    'rating': 4.8,
                 }
                 for index in range(limit or 0)
             ]
@@ -228,10 +231,11 @@ def test_live_worker_uses_reserve_candidates_to_deliver_target(setup, monkeypatc
 
     assert result['status'] == 'completed'
     assert result['qualified'] == 300
-    assert result['discovered'] == 300
+    assert result['discovered'] == 600
     with factory() as db:
         db.info['owner_id'] = 2
-        assert db.query(Business).filter(Business.campaign_id == campaign_id).count() == 300
+        assert db.query(Business).filter(Business.campaign_id == campaign_id, Business.status == 'qualified').count() == 300
+        assert db.query(Business).filter(Business.campaign_id == campaign_id, Business.status == 'researching').count() == 300
 
 
 def test_live_worker_uses_campaign_geography_and_rejects_wrong_country_phone(setup, monkeypatch):

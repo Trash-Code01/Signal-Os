@@ -1,4 +1,5 @@
 from core.runtime import IS_STAGING, RUNTIME_ENVIRONMENT
+from core.discovery import DiscoveryChannel, WebsiteFilter
 from fastapi import FastAPI, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -488,7 +489,9 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
             "shortfall": shortfall,
             "target_reached": shortfall == 0,
         },
+        "channel_errors": (job_run.metrics or {}).get('channel_errors', {}) if job_run else {},
         "summary": (
+            (job_run.error_message or 'Campaign failed. Check provider settings and retry.') if campaign.status == 'failed' and job_run else
             f"Target reached: {qualified} qualified leads delivered."
             if shortfall == 0
             else f"{qualified} of {total_target} qualified leads delivered; {shortfall} still needed, {needs_review} need review, {rejected} rejected."
@@ -600,6 +603,14 @@ class CampaignCreateRequest(BaseModel):
     min_quality_score: int = Field(ge=0, le=100)
     personal_email_enabled: bool | None = None
     phone_enabled: bool | None = None
+    discovery_channels: List[DiscoveryChannel] = Field(default_factory=lambda: ['google_maps'], min_length=1, max_length=6)
+    website_filter: WebsiteFilter = 'all'
+    sub_industry: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator('discovery_channels')
+    @classmethod
+    def unique_channels(cls, value):
+        return list(dict.fromkeys(value))
 
     @field_validator("state_province", mode="before")
     @classmethod
@@ -617,7 +628,7 @@ class CampaignCreateRequest(BaseModel):
             v = [str(c).strip() for c in v if str(c).strip()]
         if not v:
             raise ValueError("Add at least one target city")
-        return v
+        return list(dict.fromkeys(v))
 @app.get("/api/sync-sequences")
 def sync_sequences(db: Session = Depends(get_db)):
     raise HTTPException(410, "Legacy global maintenance is disabled for account-isolated data.")
@@ -662,6 +673,9 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
             status="processing",
             owner_id=user.id,
             settings={
+                "discovery_channels": req.discovery_channels,
+                "website_filter": req.website_filter,
+                "sub_industry": req.sub_industry,
                 "created_by": user.id,
                 "data_mode": "live" if (not IS_STAGING or os.getenv("DISCOVERY_MODE", "").strip().lower() == "live") else "synthetic",
                 "personal_email_enabled": user.personal_email_enabled if req.personal_email_enabled is None else req.personal_email_enabled,
@@ -989,6 +1003,9 @@ def _get_crm_leads(
     ids: Optional[List[int]] = None,
     page: int = 1,
     page_size: int = 50,
+    website_filter: str = 'all',
+    channel: Optional[str] = None,
+    sort_by: str = 'best',
 ) -> dict:
     query = (
         db.query(Business, Opportunity, Score, CRMLead, Campaign)
@@ -1024,20 +1041,35 @@ def _get_crm_leads(
         query = query.filter(Business.country == country)
     if min_score is not None:
         query = query.filter(func.coalesce(Score.commercial_score, 0) >= min_score)
+    no_website_ids = db.query(WebsiteEvidence.business_id).filter(
+        WebsiteEvidence.evidence_type == 'website_presence', WebsiteEvidence.observed_value == 'no_website')
+    if website_filter == 'no_website':
+        query = query.filter(Business.website_url.is_(None), Business.id.in_(no_website_ids))
+    elif website_filter == 'has_website':
+        query = query.filter(Business.website_url.isnot(None), Business.website_url != '')
+    elif website_filter == 'unknown':
+        query = query.filter(or_(Business.website_url.is_(None), Business.website_url == ''), ~Business.id.in_(no_website_ids))
+    if channel:
+        sources = [channel, 'serper_places'] if channel == 'google_maps' else [channel]
+        query = query.filter(Business.id.in_(db.query(BusinessSource.business_id).filter(BusinessSource.source.in_(sources))))
     if qualified_only:
         # Campaign leads must pass the worker's complete research gate. Manual
         # and imported leads remain visible because the user supplied them.
         query = query.filter(or_(Business.status == "qualified", CRMLead.source.in_(("manual", "import"))))
     if ids:
         query = query.filter(Business.id.in_(ids))
+    contact_ids = db.query(DecisionMaker.business_id).filter(or_(
+        func.coalesce(DecisionMaker.email, '') != '', func.coalesce(DecisionMaker.phone, '') != '', func.coalesce(DecisionMaker.mobile, '') != ''))
+    reachable = or_(func.coalesce(Business.primary_phone, '') != '', Business.id.in_(contact_ids))
     if has_contact is True:
-        query = query.filter(Business.id.in_(db.query(DecisionMaker.business_id).distinct()))
+        query = query.filter(reachable)
     if has_contact is False:
-        query = query.filter(~Business.id.in_(db.query(DecisionMaker.business_id).distinct()))
+        query = query.filter(~reachable)
 
     total = query.count()
+    ordering = (func.coalesce(Score.commercial_score, -1).desc(), func.coalesce(Score.data_confidence, -1).desc(), Business.id.desc()) if sort_by == 'best' else (Business.created_at.desc(), Business.id.desc())
     rows = (
-        query.order_by(func.coalesce(CRMLead.updated_at, CRMLead.created_at, Business.created_at).desc(), Business.id.desc())
+        query.order_by(*ordering)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -1047,6 +1079,14 @@ def _get_crm_leads(
         _serialize_crm_lead(business, opportunity, score, crm_lead, campaign, contacts.get(business.id, []))
         for business, opportunity, score, crm_lead, campaign in rows
     ]
+    business_ids = [lead['id'] for lead in leads]
+    sources = {}
+    for source in db.query(BusinessSource).filter(BusinessSource.business_id.in_(business_ids)).all():
+        sources.setdefault(source.business_id, []).append({'channel': 'google_maps' if source.source == 'serper_places' else source.source, 'url': source.source_url})
+    checked_ids = {row[0] for row in no_website_ids.filter(WebsiteEvidence.business_id.in_(business_ids)).all()}
+    for lead in leads:
+        lead['discovery_sources'] = sources.get(lead['id'], [])
+        lead['website_status'] = 'has_website' if lead['website_url'] else 'no_website' if lead['id'] in checked_ids else 'unknown'
     return {"leads": leads, "total": total, "page": page, "page_size": page_size}
 
 
@@ -1064,6 +1104,9 @@ def list_crm_leads(
     qualified_only: Optional[bool] = None,
     page: int = 1,
     page_size: int = 50,
+    website_filter: str = Query('all', pattern='^(all|no_website|has_website|unknown)$'),
+    channel: Optional[DiscoveryChannel] = None,
+    sort_by: str = Query('best', pattern='^(best|newest)$'),
     db: Session = Depends(get_db),
 ):
     page = max(page, 1)
@@ -1078,6 +1121,7 @@ def list_crm_leads(
         campaign_id=campaign_id, industry=industry, country=country,
         has_contact=has_contact, min_score=min_score,
         qualified_only=qualified_only, page=page, page_size=page_size,
+        website_filter=website_filter, channel=channel, sort_by=sort_by,
     )
     campaigns = [
         {"id": c.id, "name": c.name}
@@ -1095,7 +1139,8 @@ def list_crm_leads(
         )
         if row[0]
     ]
-    data["facets"] = {"campaigns": campaigns, "industries": sorted(visible_industries)}
+    countries = [r[0] for r in db.query(Business.country).join(CRMLead, CRMLead.business_id == Business.id).filter(Business.deleted_at.is_(None), CRMLead.deleted_at.is_(None), Business.country.isnot(None)).distinct().all() if r[0]]
+    data["facets"] = {"campaigns": campaigns, "industries": sorted(visible_industries), "countries": sorted(countries)}
     return data
 
 
@@ -1400,19 +1445,21 @@ def export_crm_leads(
     return StreamingResponse(output, media_type=media_type, headers={"Content-Disposition": f"attachment; filename=devacia-leads.{extension}"})
 
 @app.get("/api/dashboard")
-def get_dashboard_stats(db: Session = Depends(get_db)):
-    """Fetch aggregated stats for the dashboard."""
-    total_campaigns = db.query(Campaign).count()
-    total_businesses = db.query(Business).count()
-    total_opportunities = db.query(Opportunity).count()
+def get_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Fetch aggregated stats for the dashboard (scoped to the authenticated user)."""
+    db.info["owner_id"] = user.id
+    total_campaigns = db.query(Campaign).filter(Campaign.owner_id == user.id).count()
+    total_businesses = db.query(Business).filter(Business.owner_id == user.id).count()
+    total_opportunities = db.query(Opportunity).filter(Opportunity.owner_id == user.id).count()
     
-    # Calculate average score (approximate)
-    scores = db.query(Score.commercial_score).all()
+    # Calculate average score (scoped to user's businesses)
+    user_business_ids = [b.id for b in db.query(Business.id).filter(Business.owner_id == user.id).all()]
+    scores = db.query(Score.commercial_score).filter(Score.business_id.in_(user_business_ids)).all() if user_business_ids else []
     avg_score = sum([s[0] for s in scores]) / len(scores) if scores else 0
     
     a_plus = len([s for s in scores if s[0] >= 90])
     
-    recent_campaigns = db.query(Campaign).order_by(Campaign.created_at.desc()).limit(5).all()
+    recent_campaigns = db.query(Campaign).filter(Campaign.owner_id == user.id).order_by(Campaign.created_at.desc()).limit(5).all()
     
     formatted_recent = []
     from core.models import CampaignLocation
@@ -1439,11 +1486,11 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         val = total_opportunities + (i * 10) + (10 if i % 2 == 0 else 0)
         chart_data.append({"day": day, "value": val})
         
-    # Fetch top priority opportunities (top 3 by score)
-    top_scores = db.query(Score).order_by(Score.commercial_score.desc()).limit(3).all()
+    # Fetch top priority opportunities (top 3 by score, scoped to user)
+    top_scores = db.query(Score).filter(Score.business_id.in_(user_business_ids)).order_by(Score.commercial_score.desc()).limit(3).all() if user_business_ids else []
     priority_ops = []
     for s in top_scores:
-        b = db.query(Business).filter(Business.id == s.business_id).first()
+        b = db.query(Business).filter(Business.id == s.business_id, Business.owner_id == user.id).first()
         if b:
             priority_ops.append({
                 "id": b.id,
@@ -1970,4 +2017,3 @@ CRITICAL RULES:
     db.commit()
 
     return EmailGenerateResponse(email_body=email_text, source=source, error=err_msg)
-

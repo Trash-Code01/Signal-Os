@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { useSession } from '@/components/SessionProvider';
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal, Loader2, X, ChevronDown, RotateCcw, PanelLeftClose, PanelLeftOpen, Globe, User, Mail, Phone, Copy, Check, ExternalLink } from "lucide-react";
 import ExportDropdown, { ExportFormat, ExportScope } from "@/components/ExportDropdown";
+import { DISCOVERY_CHANNELS } from '@/lib/discovery';
+import { fetchAllCrmLeads } from '@/lib/fetchAllCrmLeads';
 import { exportLeads } from "@/lib/exportUtils";
 
 type Filters = {
@@ -16,9 +18,12 @@ type Filters = {
   country: string;
   contact: string;
   minScore: string;
+  website: string;
+  channel: string;
+  sort: string;
 };
 
-const EMPTY_FILTERS: Filters = { q: "", stage: "all", grade: "all", campaignId: "", industry: "all", country: "all", contact: "", minScore: "" };
+const EMPTY_FILTERS: Filters = { q: "", stage: "all", grade: "all", campaignId: "", industry: "all", country: "all", contact: "", minScore: "", website: "all", channel: "", sort: "best" };
 
 const SELECT_CLS = "w-full bg-[#0d0d0f] border border-zinc-800 text-zinc-200 text-sm rounded-lg px-3 py-2.5 outline-none appearance-none focus:border-purple-500 transition-colors cursor-pointer";
 const LABEL_CLS = "block text-[10px] font-bold text-zinc-500 mb-1.5 uppercase tracking-widest";
@@ -27,7 +32,7 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
   filters: Filters; updateFilters: (p: Partial<Filters>) => void;
   campaigns: any[]; industries: string[]; countries: string[]; onReset: () => void;
 }) {
-  const activeCount = Object.entries(filters).filter(([k, v]) => k !== "q" && v && v !== "all").length;
+  const activeCount = Object.entries(filters).filter(([k, v]) => k !== "q" && k !== "sort" && v && v !== "all").length;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between mb-1">
@@ -39,6 +44,9 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
         )}
       </div>
       {[
+        { label: "Website presence", key: "website", options: [["all", "All businesses"], ["no_website", "No website found"], ["has_website", "Has a website"], ["unknown", "Not yet verified"]] as [string,string][] },
+        { label: "Discovery channel", key: "channel", options: [["", "All channels"], ...DISCOVERY_CHANNELS.map(c => [c.id, c.label])] as [string,string][] },
+        { label: "Sort leads", key: "sort", options: [["best", "Best score first"], ["newest", "Newest first"]] as [string,string][] },
         { label: "Stage", key: "stage", options: [["all","All stages"],["needs_review","Needs Review"],["new","New"],["reviewing","Reviewing"],["contacted","Contacted"],["qualified","Qualified"],["proposal","Proposal"],["won","Won"],["lost","Lost"]] as [string,string][] },
         { label: "Grade", key: "grade", options: [["all","All grades"],["A+","A+ prospects"],["A","A prospects"],["B","B prospects"]] as [string,string][] },
         { label: "Min Score", key: "minScore", options: [["","Any score"],["90","90+ score"],["80","80+ score"],["70","70+ score"]] as [string,string][] },
@@ -88,7 +96,7 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
         <div className="relative">
           <select value={filters.contact} onChange={(e) => updateFilters({ contact: e.target.value })} className={SELECT_CLS}>
             <option value="">Any contact</option>
-            <option value="true">Has decision maker</option>
+            <option value="true">Has email or phone</option>
             <option value="false">No contact found</option>
           </select>
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500 pointer-events-none" />
@@ -96,6 +104,13 @@ function FilterPanel({ filters, updateFilters, campaigns, industries, countries,
       </div>
     </div>
   );
+}
+
+function DiscoveryEvidence({ lead }: { lead: { website_status?: string; discovery_sources?: { channel: string; url?: string }[] } }) {
+  return <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+    {lead.website_status !== 'has_website' && <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-300">{lead.website_status === 'no_website' ? 'No website found' : 'Website unverified'}</span>}
+    {lead.discovery_sources?.map((source, index) => source.url && /^https?:\/\//i.test(source.url) ? <a key={index} href={source.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:text-white">{DISCOVERY_CHANNELS.find(c => c.id === source.channel)?.label || source.channel} ↗</a> : null)}
+  </div>;
 }
 
 function LeadsPipelineContent() {
@@ -120,15 +135,19 @@ function LeadsPipelineContent() {
       method = 'DELETE';
     }
     try {
-      await fetch(`${apiUrl}${endpoint}`, {
+      const response = await fetch(`${apiUrl}${endpoint}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: selectedIds })
       });
+      if (!response.ok) throw new Error('Could not update the selected leads. Please retry.');
       loadLeads();
-    } catch (e) { console.warn("Bulk action error:", (e as any)?.message || e); }
+    } catch (e) { setError(e instanceof Error ? e.message : 'Bulk action failed.'); }
   };
 
+  const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
+  const requestSequence = useRef(0);
   const [loading, setLoading] = useState(true);
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [industries, setIndustries] = useState<string[]>([]);
@@ -186,7 +205,9 @@ function LeadsPipelineContent() {
   };
 
   const loadLeads = useCallback(async () => {
+    const request = ++requestSequence.current;
     setLoading(true);
+    setError('');
     setSelectedIds([]);
     try {
       const apiUrl = "";
@@ -199,11 +220,17 @@ function LeadsPipelineContent() {
       if (filters.country && filters.country !== "all") params.set("country", filters.country);
       if (filters.contact) params.set("has_contact", filters.contact);
       if (filters.minScore) params.set("min_score", filters.minScore);
+      params.set("website_filter", filters.website);
+      if (filters.channel) params.set("channel", filters.channel);
+      params.set("sort_by", filters.sort);
+      params.set("page", String(page));
       params.set("page_size", "100");
       params.set("status", statusTab);
       const res = await fetch(`${apiUrl}/api/crm/leads?${params.toString()}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Could not load leads (${res.status}).`);
       if (res.ok) {
         const data = await res.json();
+        if (request !== requestSequence.current) return;
         setCampaigns(data.facets?.campaigns || []);
         setIndustries(data.facets?.industries || []);
         setCountries(data.facets?.countries || []);
@@ -211,54 +238,37 @@ function LeadsPipelineContent() {
         setTotal(data.total || 0);
       }
     } catch (e) {
-      console.warn("Failed to load leads from backend:", (e as any)?.message || e);
+      if (request === requestSequence.current) { setLeads([]); setTotal(0); setError(e instanceof Error ? e.message : 'Could not load leads.'); }
     }
-    finally { setLoading(false); }
-  }, [filters, statusTab]);
+    finally { if (request === requestSequence.current) setLoading(false); }
+  }, [filters, statusTab, page]);
 
   useEffect(() => { const t = setTimeout(() => loadLeads(), 300); return () => clearTimeout(t); }, [filters, loadLeads]);
 
-  const updateFilters = (patch: Partial<Filters>) => setFilters((p) => ({ ...p, ...patch }));
-  const resetFilters = () => setFilters({ ...EMPTY_FILTERS, q: filters.q });
-  const activeFilterCount = Object.entries(filters).filter(([k, v]) => k !== "q" && v && v !== "all").length;
+  const updateFilters = (patch: Partial<Filters>) => { requestSequence.current++; setPage(1); setFilters((p) => ({ ...p, ...patch })); };
+  const resetFilters = () => { requestSequence.current++; setPage(1); setFilters({ ...EMPTY_FILTERS, q: filters.q }); };
+  const activeFilterCount = Object.entries(filters).filter(([k, v]) => k !== "q" && k !== "sort" && v && v !== "all").length;
 
   const handleExportLeads = async (format: ExportFormat, scope: ExportScope) => {
-    let targetLeads: any[] = [];
-    if (scope === "selected" && selectedIds.length > 0) {
-      targetLeads = leads.filter((l) => selectedIds.includes(l.id));
-    } else {
-      if (leads.length >= total && leads.length > 0) {
-        targetLeads = leads;
-      } else {
-        try {
-          const apiUrl = "";
-          const params = new URLSearchParams();
-          if (filters.q.trim()) params.set("q", filters.q.trim());
-          if (filters.stage !== "all") params.set("stage", filters.stage);
-          if (filters.grade !== "all") params.set("grade", filters.grade);
-          if (filters.campaignId) params.set("campaign_id", filters.campaignId);
-          if (filters.industry && filters.industry !== "all") params.set("industry", filters.industry);
-          if (filters.country && filters.country !== "all") params.set("country", filters.country);
-          if (filters.contact) params.set("has_contact", filters.contact);
-          if (filters.minScore) params.set("min_score", filters.minScore);
-          params.set("page_size", "5000");
-          params.set("status", statusTab);
-          const res = await fetch(`${apiUrl}/api/crm/leads?${params.toString()}`);
-          if (res.ok) {
-            const data = await res.json();
-            targetLeads = data.leads || leads;
-          } else {
-            targetLeads = leads;
-          }
-        } catch (e) {
-          targetLeads = leads;
-        }
-      }
+    try {
+      const targetLeads = scope === 'selected' ? leads.filter(l => selectedIds.includes(l.id)) : await fetchAllCrmLeads({
+        q: filters.q.trim(), stage: filters.stage, grade: filters.grade,
+        campaign_id: filters.campaignId || undefined, industry: filters.industry, country: filters.country,
+        has_contact: filters.contact || undefined, min_score: filters.minScore || undefined,
+        website_filter: filters.website, channel: filters.channel || undefined, sort_by: filters.sort, status: statusTab,
+      });
+      if (targetLeads.length) exportLeads(targetLeads, format, `devacia-leads-${scope}-${targetLeads.length}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Export failed. Please retry.');
+      throw cause;
     }
-    if (!targetLeads.length) return;
-    const prefix = scope === "selected" ? `devacia-leads-selected-${targetLeads.length}` : `devacia-leads-all-${targetLeads.length}`;
-    exportLeads(targetLeads, format, prefix);
   };
+
+  const pagination = <nav aria-label="Lead pages" className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-[#09090b] px-5 py-3 text-xs text-zinc-400">
+    <button disabled={page === 1 || loading} onClick={() => { requestSequence.current++; setPage(p => p - 1); }} className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-30">Previous</button>
+    <span>Page {page} of {Math.max(1, Math.ceil(total / 100))} · {selectedIds.length} selected on this page</span>
+    <button disabled={page * 100 >= total || loading} onClick={() => { requestSequence.current++; setPage(p => p + 1); }} className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-30">Next</button>
+  </nav>;
 
   const stageColor: Record<string, string> = {
     qualified: "bg-emerald-900/40 text-emerald-400 border border-emerald-800/40",
@@ -321,7 +331,7 @@ function LeadsPipelineContent() {
                   title="Show crawled website email & business phone number from site crawl"
                 >
                   <Globe className="w-3.5 h-3.5" />
-                  <span>Crawl Contacts</span>
+                  <span>Business Contacts</span>
                   <span className="text-[9px] px-1 py-0.2 rounded bg-purple-700/60 text-purple-200 uppercase font-bold tracking-wider">Default</span>
                 </button>
                 <button
@@ -350,6 +360,7 @@ function LeadsPipelineContent() {
             </div>
           </div>
 
+          {error && <p role="alert" className="bg-red-950/40 p-3 text-sm text-red-300">{error}</p>}
           {/* Table */}
           <div className="flex-1 overflow-y-auto">
             {loading ? (
@@ -366,6 +377,7 @@ function LeadsPipelineContent() {
                     <th className="px-5 py-3 w-12 text-left">
   <input 
     type="checkbox" 
+    aria-label="Select all leads on this page"
     className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700 cursor-pointer" 
     checked={leads.length > 0 && selectedIds.length === leads.length}
     onChange={() => selectedIds.length === leads.length ? setSelectedIds([]) : setSelectedIds(leads.map(l => l.id))}
@@ -395,16 +407,18 @@ function LeadsPipelineContent() {
                     return (
                       <tr key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}
                         className="hover:bg-white/[0.03] cursor-pointer transition-colors group">
-                        <td className="px-5 py-3.5 w-12" onClick={(e) => { e.stopPropagation(); setSelectedIds(prev => prev.includes(lead.id) ? prev.filter(id => id !== lead.id) : [...prev, lead.id]) }}>
+                        <td className="px-5 py-3.5 w-12" onClick={e => e.stopPropagation()}>
       <input 
         type="checkbox" 
-        className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700 cursor-pointer pointer-events-none" 
+        aria-label={`Select ${lead.name}`}
+        className="accent-purple-500 w-4 h-4 rounded bg-zinc-800 border-zinc-700 cursor-pointer"
         checked={selectedIds.includes(lead.id)}
-        readOnly
+        onChange={() => setSelectedIds(previous => previous.includes(lead.id) ? previous.filter(id => id !== lead.id) : [...previous, lead.id])}
       />
   </td>
   <td className="px-2 py-3.5 cursor-pointer" onClick={() => router.push(`/leads/${lead.id}`)}>
                           <p className="font-semibold text-white group-hover:text-purple-300 transition-colors leading-tight">{lead.name}</p>
+                          <DiscoveryEvidence lead={lead} />
                           {lead.website_url && (
                             <a
                               href={lead.website_url.startsWith('http') ? lead.website_url : `https://${lead.website_url}`}
@@ -543,18 +557,20 @@ function LeadsPipelineContent() {
               </table>
             )}
           </div>
+          {pagination}
         </div>
       </div>
 
       {/* =============== MOBILE (below md) =============== */}
       <div className="md:hidden pb-24">
         <main className="p-4">
+          {error && <p role="alert" className="bg-red-950/40 p-3 text-sm text-red-300">{error}</p>}
           <div className="mt-4 mb-5">
             <div className="flex items-end gap-3 mb-1">
               <h1 className="text-2xl font-bold text-white tracking-tight">Leads CRM</h1>
               <span className="bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full text-xs font-bold mb-0.5">{total} leads</span>
             </div>
-            <p className="text-sm text-zinc-500">Enriched business prospects.</p>
+            <p className="text-sm text-zinc-500">Ranked business opportunities. Filter sources, review evidence, and select leads.</p>
           </div>
 
           <div className="flex gap-3 mb-3">
@@ -591,7 +607,7 @@ function LeadsPipelineContent() {
               }`}
             >
               <Globe className="w-3.5 h-3.5" />
-              <span>Crawl Contacts</span>
+              <span>Business Contacts</span>
               <span className="text-[9px] px-1 py-0.2 rounded bg-purple-700/60 text-purple-200 uppercase font-bold">Default</span>
             </button>
             <button
@@ -624,7 +640,11 @@ function LeadsPipelineContent() {
                 return (
                   <div key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}
                     className="bg-[#121214] rounded-2xl p-4 cursor-pointer active:scale-[0.98] transition-all border border-transparent hover:border-zinc-800">
-                    <h2 className="text-base font-bold text-white leading-tight mb-0.5">{lead.name}</h2>
+                    <div className="flex items-start justify-between gap-3">
+                      <h2 className="text-base font-bold text-white leading-tight mb-0.5">{lead.name}</h2>
+                      <input type="checkbox" aria-label={`Select ${lead.name}`} checked={selectedIds.includes(lead.id)} onClick={e => e.stopPropagation()} onChange={() => setSelectedIds(previous => previous.includes(lead.id) ? previous.filter(id => id !== lead.id) : [...previous, lead.id])} className="accent-violet-500" />
+                    </div>
+                    <DiscoveryEvidence lead={lead} />
                     <p className="text-xs text-zinc-500 mb-3">{lead.industry || "Uncategorized"} · {lead.location || "US"}</p>
                     <div className="flex items-center gap-2 mb-3">
                       <span className={`${scoreClass(lead.commercial_score || 0)} px-2 py-0.5 rounded-md text-xs font-bold`}>
@@ -691,6 +711,7 @@ function LeadsPipelineContent() {
               })}
             </div>
           )}
+          {pagination}
         </main>
       </div>
 

@@ -12,6 +12,7 @@ from core.models import (
     Score,
     Website,
     WebsiteAudit,
+    WebsiteEvidence,
     CRMActivity,
 )
 
@@ -156,6 +157,7 @@ def run_mock_campaign(db, campaign):
         clean_slug = re.sub(r"[^a-z0-9]+", "-", biz_name.lower()).strip("-")
         website_domain = f"{clean_slug}-{seq}.test.invalid"
         website_url = f"https://{website_domain}"
+        no_website_fixture = (campaign.settings or {}).get('website_filter') == 'no_website'
 
         # Check if this candidate already exists in the CRM or database
         duplicate = find_existing_business(db, {
@@ -180,8 +182,8 @@ def run_mock_campaign(db, campaign):
             city=city,
             address="Synthetic staging fixture",
             primary_phone=None,
-            website_url=website_url,
-            website_domain=website_domain,
+            website_url=None if no_website_fixture else website_url,
+            website_domain=None if no_website_fixture else website_domain,
             status="qualified",
             rating=4.8,
             review_count=35 + number * 7,
@@ -190,11 +192,14 @@ def run_mock_campaign(db, campaign):
         db.flush()
 
         db.add(BusinessSource(business_id=business.id, source="mock", source_url=None))
+        if no_website_fixture:
+            db.add(WebsiteEvidence(business_id=business.id, evidence_type='website_presence', observed_value='no_website',
+                                   finding='Synthetic no-website fixture. No live verification performed.', confidence=0))
 
         # Add Website and Audit
         website = Website(
             business_id=business.id,
-            url=business.website_url,
+            url=website_url,
             is_live=False,
             has_ssl=None,
             cms=None,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 
@@ -38,11 +38,15 @@ def _identity_keys(business: Dict[str, Any]) -> Iterable[str]:
     )))
     if domain:
         yield f"domain:{domain}"
+    if business.get('google_place_id'):
+        yield f"place:{business['google_place_id']}"
     if len(phone) >= 7:
         yield f"phone:{phone}"
     # A name alone is too weak; combine it with a discovered location.
     if name and location:
         yield f"name_location:{name}|{location}"
+    if name and business.get('city') and business.get('country'):
+        yield f"name_city:{name}|{_normalise_text(business['city'])}|{_normalise_text(business['country'])}"
 
 
 class DeduplicationEngine:
@@ -55,14 +59,39 @@ class DeduplicationEngine:
 
     def deduplicate(self, raw_businesses: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         unique_businesses: List[Dict[str, Any]] = []
-        seen: set[str] = set()
+        seen: dict[str, dict] = {}
 
         for business in raw_businesses:
             keys = list(_identity_keys(business))
-            if keys and any(key in seen for key in keys):
+            business.setdefault('sources', [{
+                'channel': (business.get('source_metadata') or {}).get('channel') or (business.get('source_metadata') or {}).get('source', 'unknown'),
+                'url': business.get('source_url'),
+            }])
+            matched_ids = {id(seen[key]) for key in keys if key in seen}
+            matches = [record for record in unique_businesses if id(record) in matched_ids]
+            existing = matches[0] if matches else None
+            if existing is not None:
+                for duplicate in [*matches[1:], business]:
+                    for source in duplicate['sources']:
+                        if source not in existing['sources']:
+                            existing['sources'].append(source)
+                    for field in ('primary_phone', 'website_url', 'review_count', 'rating', 'google_place_id'):
+                        if not existing.get(field) and duplicate.get(field):
+                            existing[field] = duplicate[field]
+                    if duplicate.get('website_status') == 'no_website':
+                        existing['website_status'] = 'no_website'
+                if existing.get('website_url'):
+                    existing['website_status'] = 'has_website'
+                # A bridge record can connect two previously separate groups.
+                removed_ids = {id(record) for record in matches[1:]}
+                unique_businesses = [record for record in unique_businesses if id(record) not in removed_ids]
+                for key, record in seen.items():
+                    if id(record) in removed_ids:
+                        seen[key] = existing
+                seen.update({key: existing for key in keys})
                 continue
             unique_businesses.append(business)
-            seen.update(keys)
+            seen.update({key: business for key in keys})
 
         return unique_businesses
 
@@ -98,9 +127,9 @@ def find_existing_business(db: Any, business_data: Dict[str, Any], owner_id: Opt
         if match:
             return match
         # Check against website_url if website_domain was not indexed or null
-        match = query.filter(func.lower(Business.website_url).ilike(f"%{domain}%")).first()
-        if match:
-            return match
+        for candidate in query.filter(Business.website_domain.is_(None), Business.website_url.isnot(None)).all():
+            if _normalise_domain(candidate.website_url) == domain:
+                return candidate
 
     # 3. Normalized Phone
     raw_phone = business_data.get("primary_phone") or business_data.get("phone")
@@ -114,13 +143,12 @@ def find_existing_business(db: Any, business_data: Dict[str, Any], owner_id: Opt
         # Match across formatted phone strings (e.g. "+1 214-555-4321" vs "(214) 555-4321")
         last4 = phone_digits[-4:]
         candidates = query.filter(Business.primary_phone.isnot(None), Business.primary_phone.ilike(f"%{last4}%")).all()
-        target_last7 = phone_digits[-7:]
         for cand in candidates:
             if not cand.primary_phone:
                 continue
             cand_digits = _normalise_phone(cand.primary_phone)
-            # Match if full normalized digits match or last 7 digits match (local number equivalence)
-            if cand_digits == phone_digits or (len(cand_digits) >= 7 and cand_digits[-7:] == target_last7):
+            # Suffixes alone collide across area/country codes.
+            if cand_digits == phone_digits:
                 return cand
 
     # 4. Normalized Name + City

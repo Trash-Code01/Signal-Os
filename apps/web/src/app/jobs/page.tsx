@@ -136,6 +136,7 @@ function JobsContent() {
   const [campaignStatus, setCampaignStatus] = useState('processing');
   const [dataMode, setDataMode] = useState<'live' | 'synthetic'>('live');
   const [summary, setSummary] = useState('');
+  const [channelErrors, setChannelErrors] = useState<Record<string, string>>({});
   const { user } = useSession();
   const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
   const loadedOptions = useRef(false);
@@ -212,6 +213,7 @@ function JobsContent() {
           setDataMode(data.data_mode === 'synthetic' ? 'synthetic' : 'live');
           setCampaignName(data.name || `Campaign #${campaignId}`);
           setSummary(data.summary || '');
+          setChannelErrors(data.channel_errors || {});
           if (!loadedOptions.current && data.contact_options) {
             setOptions(data.contact_options);
             loadedOptions.current = true;
@@ -389,6 +391,7 @@ function JobsContent() {
             <p className="text-xs text-zinc-400 mt-0.5">
               {summary || `${stats.qualified} qualified leads generated against target of ${targetLeads}.`}
             </p>
+            {Object.entries(channelErrors).map(([channel, message]) => <p key={channel} className="mt-2 text-xs text-amber-300">{channel}: {message}</p>)}
           </div>
 
           <div className="flex items-center gap-2 text-xs font-mono self-start sm:self-auto">

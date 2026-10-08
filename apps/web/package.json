@@ -9,7 +9,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:auth": "node --test tests/auth.test.cjs"
+    "test:auth": "node --test tests/auth.test.cjs",
+    "test:discovery": "node --test tests/discovery.test.cjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

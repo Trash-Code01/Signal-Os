@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 
 import { useSession } from '@/components/SessionProvider';
 import { ContactOptions, LookupOptions } from '@/components/ContactOptions';
+import { DISCOVERY_CHANNELS, WEBSITE_OPTIONS } from '@/lib/discovery';
 
 const INDUSTRIES = [
   { value: 'roofing', label: 'Roofing', sub: ['Residential', 'Commercial', 'Storm Damage'] },
@@ -14,12 +15,6 @@ const INDUSTRIES = [
   { value: 'real_estate', label: 'Real Estate', sub: ['Residential', 'Commercial'] },
   { value: 'd2c', label: 'D2C / Ecommerce', sub: ['Fashion', 'Beauty', 'Health', 'Food'] },
   { value: 'wedding', label: 'Wedding Photography', sub: ['Photography', 'Videography'] },
-];
-
-const RESEARCH_DEPTHS = [
-  { value: 'basic', label: 'Basic', desc: 'Business data + phone + website check only' },
-  { value: 'standard', label: 'Standard', desc: '+ CTA audit, contact extraction, social media' },
-  { value: 'deep', label: 'Deep', desc: '+ Full Playwright crawl, UX audit, AI SDR analysis, decision-maker enrichment' },
 ];
 
 export default function NewCampaignPage() {
@@ -36,6 +31,8 @@ export default function NewCampaignPage() {
     }
   }, [user]);
 
+  const [channels, setChannels] = useState<string[]>(DISCOVERY_CHANNELS.map(c => c.id));
+  const [websiteFilter, setWebsiteFilter] = useState('no_website');
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
@@ -47,14 +44,14 @@ export default function NewCampaignPage() {
     sub_industry: '',
     raw_target: 10,
     min_score: 60,
-    a_plus_target: 50,
-    a_target: 50,
-    research_depth: 'deep',
   });
 
   const selectedIndustry = INDUSTRIES.find(i => i.value === form.industry);
 
   async function handleSubmit() {
+    if (loading) return;
+    if (!channels.length) { setError('Select at least one discovery channel.'); return; }
+    if (!Number.isInteger(form.min_score) || form.min_score < 0 || form.min_score > 100) { setError('Minimum score must be between 0 and 100.'); return; }
     setLoading(true);
     setError('');
 
@@ -82,7 +79,7 @@ export default function NewCampaignPage() {
       return;
     }
 
-    const targetCities = parsedCities;
+    const targetCities = [...new Set(parsedCities)];
     const campaignName = (
       form.name.trim() ||
       `${form.country} ${targetCities.join(', ')} ${selectedIndustry?.label || form.industry}`
@@ -101,7 +98,10 @@ export default function NewCampaignPage() {
           cities: targetCities,
           industry: form.industry,
           target_quantity: requestedTarget,
-          min_quality_score: Math.max(0, Math.min(100, Number(form.min_score) || 60)),
+          min_quality_score: form.min_score,
+          discovery_channels: channels,
+          website_filter: websiteFilter,
+          sub_industry: form.sub_industry || undefined,
           personal_email_enabled: Boolean(options.personal_email_enabled),
           phone_enabled: Boolean(options.phone_enabled),
         }),
@@ -131,7 +131,7 @@ export default function NewCampaignPage() {
 
   if (user?.role === 'viewer') return <div className="p-10 text-zinc-400">Your Viewer role can read and export your data. Ask an admin for Member access to run campaigns.</div>;
 
-  const STEPS = ['Geography', 'Industry', 'Targets', 'Research'];
+  const STEPS = ['Geography', 'Industry', 'Opportunity', 'Channels'];
 
   return (
     <div className="p-4 md:p-10 max-w-4xl pb-24 md:pb-10 mx-auto">
@@ -148,8 +148,8 @@ export default function NewCampaignPage() {
           <span>/</span>
           <span className="text-white">New Campaign</span>
         </div>
-        <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">Create Campaign</h1>
-        <p className="text-sm md:text-base text-zinc-400 mt-1 md:mt-2">Configure your lead intelligence pipeline</p>
+        <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">Find your next business opportunity</h1>
+        <p className="text-sm md:text-base text-zinc-400 mt-1 md:mt-2">Discover businesses across public channels, check website presence, and rank contactable leads.</p>
       </div>
 
       {/* Step Progress - Desktop */}
@@ -220,7 +220,7 @@ export default function NewCampaignPage() {
                   value={form.cities}
                   onChange={e => setForm({ ...form, cities: e.target.value })}
                 />
-                <p className="text-xs text-zinc-600 mt-2">The pipeline will search all specified cities in parallel</p>
+                <p className="text-xs text-zinc-600 mt-2">Search up to 20 target cities and retain the source behind each lead.</p>
               </div>
             </div>
           </div>
@@ -326,8 +326,17 @@ export default function NewCampaignPage() {
           <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-4 md:p-6">
             <h2 className="text-white font-semibold mb-5 flex items-center gap-2">
               <span className="w-6 h-6 rounded bg-[#8b5cf6]/20 text-[#a78bfa] text-xs flex items-center justify-center">3</span>
-              Lead Targets
+              Opportunity & Quality
             </h2>
+            <fieldset className="mb-6 grid gap-3 md:grid-cols-3">
+              <legend className="text-xs text-zinc-400 mb-3">Website presence</legend>
+              {WEBSITE_OPTIONS.map(option => (
+                <label key={option.id} className={`cursor-pointer rounded-xl border p-4 ${websiteFilter === option.id ? 'border-violet-400 bg-violet-500/10' : 'border-zinc-800'}`}>
+                  <span className="flex items-center gap-2"><input type="radio" name="websitePresence" checked={websiteFilter === option.id} onChange={() => setWebsiteFilter(option.id)} className="accent-violet-500" /><span className="text-sm text-white">{option.label}</span></span>
+                  <p className="mt-2 text-xs text-zinc-400 leading-5">{option.description}</p>
+                </label>
+              ))}
+            </fieldset>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
                 <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Qualified Lead Target</label>
@@ -337,21 +346,14 @@ export default function NewCampaignPage() {
               <div>
                 <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">Minimum Qualification Score</label>
                 <input type="number" min="0" max="100" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.min_score} onChange={e => setForm({ ...form, min_score: +e.target.value })} />
-                <p className="text-xs text-zinc-600 mt-2">Leads below this score are rejected</p>
+                <p className="text-xs text-zinc-600 mt-2">Scores use observed business activity, website opportunity and contactability. Targets may be partially filled.</p>
               </div>
-              <div className="pt-2">
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A+ Target <span className="text-zinc-600 normal-case">(score ≥ 90)</span></label>
-                <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.a_plus_target} onChange={e => setForm({ ...form, a_plus_target: +e.target.value })} />
-              </div>
-              <div className="pt-2">
-                <label className="text-xs text-zinc-400 uppercase tracking-wider mb-2 block">A Target <span className="text-zinc-600 normal-case">(score 80–89)</span></label>
-                <input type="number" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg md:rounded-md px-3 py-3 md:py-2.5 text-white text-sm outline-none focus:border-[#8b5cf6]/50 transition-colors" value={form.a_target} onChange={e => setForm({ ...form, a_target: +e.target.value })} />
-              </div>
+
             </div>
           </div>
           <div className="flex gap-3 md:justify-between">
             <button onClick={() => setStep(2)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
-            <button onClick={() => setStep(4)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Research →</button>
+            <button onClick={() => setStep(4)} className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] text-white px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-medium transition shadow-lg shadow-purple-900/20">Next: Channels →</button>
           </div>
         </div>
       )}
@@ -362,28 +364,21 @@ export default function NewCampaignPage() {
           <div className="bg-[#121214] border border-zinc-800/60 rounded-xl p-4 md:p-6">
             <h2 className="text-white font-semibold mb-5 flex items-center gap-2">
               <span className="w-6 h-6 rounded bg-[#8b5cf6]/20 text-[#a78bfa] text-xs flex items-center justify-center">4</span>
-              Research Depth
+              Discovery Channels
             </h2>
-            <div className="space-y-3 mb-6">
-              {RESEARCH_DEPTHS.map(d => (
-                <button
-                  key={d.value}
-                  onClick={() => setForm({ ...form, research_depth: d.value })}
-                  className={`w-full text-left p-4 rounded-xl border transition active:scale-[0.98] ${
-                    form.research_depth === d.value
-                      ? 'border-[#8b5cf6]/60 bg-[#8b5cf6]/10'
-                      : 'border-zinc-800 bg-[#09090b] hover:border-zinc-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className={`font-medium text-sm ${form.research_depth === d.value ? 'text-white' : 'text-zinc-400'}`}>{d.label}</span>
-                    {form.research_depth === d.value && <span className="text-[#a78bfa] text-[10px] uppercase font-bold tracking-wider">Selected</span>}
-                  </div>
-                  <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed">{d.desc}</p>
-                </button>
+            <div className="flex justify-between items-center mb-4">
+              <p className="text-sm text-zinc-400">{channels.length} channels selected</p>
+              <button type="button" onClick={() => setChannels(DISCOVERY_CHANNELS.map(c => c.id))} className="text-xs text-violet-300">Select all channels</button>
+            </div>
+            <div className="grid md:grid-cols-2 gap-3 mb-4">
+              {DISCOVERY_CHANNELS.map(channel => (
+                <label key={channel.id} className={`flex gap-3 cursor-pointer rounded-xl border p-4 ${channels.includes(channel.id) ? 'border-violet-500/60 bg-violet-500/10' : 'border-zinc-800'}`}>
+                  <input type="checkbox" className="accent-violet-500" checked={channels.includes(channel.id)} disabled={loading} onChange={() => setChannels(previous => previous.includes(channel.id) ? previous.filter(c => c !== channel.id) : [...previous, channel.id])} />
+                  <span><span className="text-sm font-medium text-white">{channel.label}</span><span className="block mt-1 text-xs text-zinc-400 leading-5">{channel.description}</span></span>
+                </label>
               ))}
             </div>
-
+            <p className="text-xs leading-5 text-zinc-500 mb-6">All channels use the configured Serper provider. Results depend on public search coverage and provider credits. Social and directory pages are candidates for review; private platform data is not accessed.</p>
             <div className="mb-6"><ContactOptions value={options} onChange={setOptions} disabled={loading} /></div>
             {/* Summary */}
             <div className="border-t border-zinc-800/60 pt-5">
@@ -397,8 +392,10 @@ export default function NewCampaignPage() {
                 <span className="text-white text-right md:text-left">{form.raw_target.toLocaleString()}</span>
                 <span className="text-zinc-500">Min score</span>
                 <span className="text-white text-right md:text-left">{form.min_score}/100</span>
-                <span className="text-zinc-500">A+ / A</span>
-                <span className="text-white text-right md:text-left">{form.a_plus_target} / {form.a_target}</span>
+                <span className="text-zinc-500">Website presence</span>
+                <span className="text-white">{WEBSITE_OPTIONS.find(o => o.id === websiteFilter)?.label}</span>
+                <span className="text-zinc-500">Discovery channels</span>
+                <span className="text-white">{channels.length} selected</span>
               </div>
             </div>
           </div>
@@ -406,7 +403,7 @@ export default function NewCampaignPage() {
             <button onClick={() => setStep(3)} className="flex-1 md:flex-none border border-zinc-800 text-zinc-400 px-6 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm hover:text-white hover:bg-zinc-800/50 transition">← Back</button>
             <button
               onClick={handleSubmit}
-              disabled={loading}
+              disabled={loading || !channels.length}
               className="flex-[2] md:flex-none bg-[#8b5cf6] hover:bg-[#7c3aed] disabled:opacity-50 text-white px-8 py-3 md:py-2.5 rounded-lg md:rounded-md text-sm font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-purple-900/20"
             >
               {loading ? (

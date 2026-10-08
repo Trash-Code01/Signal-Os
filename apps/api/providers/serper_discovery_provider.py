@@ -6,20 +6,7 @@ import urllib.parse
 from typing import List, Dict, Any, Optional
 from core.providers import BusinessDiscoveryProvider
 from core.provider_health import report_provider_state
-from core.lead_quality import canonical_country, clean_phone_for_country, clean_website_url
-
-# Domains that are NEVER a valid local business website — always skip these
-JUNK_WEBSITE_DOMAINS = {
-    "wikipedia.org", "yelp.com", "facebook.com", "tripadvisor.com", "instagram.com",
-    "linkedin.com", "google.com", "doordash.com", "ubereats.com", "grubhub.com",
-    "yellowpages.com", "angi.com", "houzz.com", "thumbtack.com", "homeadvisor.com",
-    "opentable.com", "zillow.com", "realtor.com", "chamberofcommerce.com", "manta.com",
-    "bizapedia.com", "zoominfo.com", "dnb.com", "glassdoor.com", "indeed.com",
-    "trustpilot.com", "foursquare.com", "alignable.com", "twitter.com", "x.com",
-    "tiktok.com", "youtube.com", "mapquest.com", "bbb.org", "fmcsa.dot.gov",
-    "serviceagent.ai",
-}
-
+from core.lead_quality import canonical_country, clean_phone_for_country, clean_website_url, JUNK_WEBSITE_DOMAINS
 
 def _is_junk_website(url) -> bool:
     """Return True if the URL is a directory, social, Wikipedia, or chain HQ page."""
@@ -47,6 +34,7 @@ def _parse_target_location(location: str) -> tuple[Optional[str], Optional[str],
 class SerperDiscoveryProvider(BusinessDiscoveryProvider):
     def __init__(self):
         self.api_key = os.environ.get("SERPER_API_KEY", "").strip()
+        self.lookup_semaphore = asyncio.Semaphore(5)
 
     def _is_directory_or_social(self, link: str) -> bool:
         return _is_junk_website(link)
@@ -84,16 +72,19 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
 
     async def _fetch_website(self, session: aiohttp.ClientSession, business: dict):
         """Fallback to Serper organic search to find the website if Google Maps did not provide one."""
-        query = f"{business.get('name', '')} {business.get('address', '')} official website"
+        business['website_status'] = 'unknown'
+        query = f"{business.get('name', '')} {business.get('address') or business.get('city', '')} official website"
         payload = {"q": query, "num": 5}
         try:
             headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
-            async with session.post("https://google.serper.dev/search", headers=headers, json=payload) as response:
+            async with self.lookup_semaphore, session.post("https://google.serper.dev/search", headers=headers, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
                     for res in data.get("organic", []):
                         if self._is_official_business_website(res, business.get("name", "")):
+                            business['website_status'] = 'has_website'
                             return res.get("link")
+                    business['website_status'] = 'no_website'
         except Exception as e:
             print(f"Error fetching website for {business.get('name')}: {e}")
         return None
@@ -102,10 +93,8 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         print(f"Serper discovering: {query} in {location} for {industry}")
 
         if not self.api_key:
-            print("Serper API key missing. Falling back to MockDiscoveryProvider so campaign delivers sample leads.")
-            report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing. Using fallback discovery.")
-            from .mock_discovery import MockDiscoveryProvider
-            return await MockDiscoveryProvider().discover(query, location, industry, limit)
+            report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing.")
+            raise RuntimeError("Live discovery requires SERPER_API_KEY. No sample leads were created.")
 
         target_city, target_state, target_country = _parse_target_location(location)
         if not target_city or not target_country:
@@ -129,7 +118,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         seen_cids = set()
 
         try:
-            async with aiohttp.ClientSession(headers=headers) as session:
+            async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
                 for page in range(1, max_pages + 1):
                     if len(places) >= target_limit:
                         break
@@ -147,9 +136,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                                 state = "cooldown" if response.status == 429 else "exhausted" if response.status in (402, 403) else "invalid_key" if response.status == 401 else "unavailable"
                                 report_provider_state("serper", state, f"Business discovery failed ({response.status}).", response.status)
                                 if not places:
-                                    print("Serper failed on initial query. Falling back to MockDiscoveryProvider.")
-                                    from .mock_discovery import MockDiscoveryProvider
-                                    return await MockDiscoveryProvider().discover(query, location, industry, limit)
+                                    raise RuntimeError(f"Live discovery failed ({response.status}).")
                                 break
 
                             page_places = data.get("places", [])
@@ -198,6 +185,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                     raw_businesses.append({
                         "name": place.get("title"),
                         "website_url": website,
+                        "website_status": "has_website" if website else "unknown",
                         "primary_phone": clean_phone_for_country(place.get("phoneNumber"), target_country),
                         "address": address_str,
                         "city": target_city,
@@ -212,6 +200,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                         "source_url": source_url,
                         "source_metadata": {
                             "source": "serper_places",
+                            "channel": "google_maps",
                             "rank_group": place.get("position"),
                             "website_source": "google_business_profile" if website else None,
                         }
@@ -236,5 +225,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
 
         except Exception as e:
             print(f"Serper discovery error: {e}")
+            if not raw_businesses:
+                raise RuntimeError("Google Maps discovery unavailable; retry after checking provider health.") from e
 
         return raw_businesses

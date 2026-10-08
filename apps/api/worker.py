@@ -13,6 +13,7 @@ from sqlalchemy import or_
 
 from core.database import SessionLocal
 from core.deduplication import DeduplicationEngine
+from core.discovery import candidate_priority, no_website_score
 from core.lead_quality import clean_phone_for_country, clean_website_url
 from core.models import (
     AIAnalysis,
@@ -102,6 +103,7 @@ def _page_type(url: str) -> str:
 
 def _set_business_status(db, business, status: str):
     business.status = status
+    previous_system_access = db.info.get('system_access')
     db.info["system_access"] = True
     try:
         crm = db.query(CRMLead).filter(CRMLead.business_id == business.id).first()
@@ -118,7 +120,10 @@ def _set_business_status(db, business, status: str):
             crm.stage = "archived"
         db.flush()
     finally:
-        db.info.pop("system_access", None)
+        if previous_system_access is None:
+            db.info.pop("system_access", None)
+        else:
+            db.info['system_access'] = previous_system_access
 
 
 def _existing_business(db, data: Dict[str, Any]) -> Optional[Business]:
@@ -426,29 +431,18 @@ def _qualify_no_website_business(db, business: Business) -> int:
             "forced to rely on third-party listings instead of a direct path to call or enquire."
         ),
         ai_reasoning="Qualified from discovery evidence: no official website was found. Public contact research continues independently.",
-        confidence="high",
+        confidence="medium",
     )
     db.add(opportunity)
     db.flush()
-    db.add(Score(
-        business_id=business.id,
-        commercial_score=100,
-        data_confidence=80,
-        grade="A+",
-        business_fit=100,
-        digital_gap=100,
-        offer_fit=100,
-        buying_intent=80,
-        contactability=50 if business.primary_phone else 20,
-        score_version="v2-no-website",
-    ))
-    db.add(AIAnalysis(
+    analysis = AIAnalysis(
         business_id=business.id,
         opportunity_id=opportunity.id,
         model_name="deterministic_rule",
         prompt_template="no_website_rule_with_public_contact_research",
-        parsed_output={"confidence": "high", "primary_problem": "No official website found"},
-    ))
+        parsed_output={"confidence": "medium", "primary_problem": "No official website found"},
+    )
+    db.add(analysis)
     campaign = db.get(Campaign, business.campaign_id) if business.campaign_id else None
     if campaign:
         db.refresh(campaign)
@@ -459,8 +453,24 @@ def _qualify_no_website_business(db, business: Business) -> int:
         contact["source"] = contact.get("source") or "google_search_fallback"
         saved_contacts += int(_save_contact(db, business.id, contact))
 
-    has_contact = (saved_contacts > 0) or bool(business.primary_phone) or _has_actionable_contact(db, business)
-    final_status = "qualified" if has_contact else "needs_contact_enrichment"
+    db.flush()
+    has_contact = bool(business.primary_phone) or _has_actionable_contact(db, business)
+    checked = db.query(WebsiteEvidence.id).filter(
+        WebsiteEvidence.business_id == business.id, WebsiteEvidence.evidence_type == 'website_presence',
+        WebsiteEvidence.observed_value == 'no_website').first() is not None
+    result = no_website_score(phone=bool(business.primary_phone), contact=has_contact,
+                              reviews=business.review_count or 0, rating=business.rating or 0, checked=checked)
+    if not checked:
+        opportunity.primary_problem = 'Website presence has not been verified'
+        opportunity.problems = ['Official website lookup incomplete; further research required']
+        opportunity.outreach_angle = None
+        opportunity.confidence = 'low'
+        opportunity.ai_reasoning = 'Website lookup is incomplete. No website opportunity has been established.'
+        analysis.parsed_output = {'confidence': 'low', 'primary_problem': opportunity.primary_problem}
+    db.add(Score(business_id=business.id, **result, score_version='v3-evidence-no-website'))
+    threshold = campaign.min_quality_score if campaign and campaign.min_quality_score is not None else 80
+    final_status = ('needs_research' if not checked else 'below_quality_threshold' if result['commercial_score'] < threshold
+                    else 'qualified' if has_contact else 'needs_contact_enrichment')
     _set_business_status(db, business, final_status)
 
     db.add(CRMActivity(
@@ -469,8 +479,8 @@ def _qualify_no_website_business(db, business: Business) -> int:
         body=(
             "Qualified as a no-website opportunity. Public contact research found "
             f"{saved_contacts} new decision-maker record(s); the business phone remains available as a fallback."
-            if has_contact else
-            "No official website and no callable contact found. Routed to needs review."
+            if final_status == 'qualified' else
+            f"Website research needs review: {final_status}. Score {result['commercial_score']}/100; minimum {threshold}."
         ),
         created_by="Lead Intelligence",
     ))
@@ -653,7 +663,11 @@ def process_campaign_task(campaign_id: int):
         }
         search_term = industry_map.get(industry_raw.lower(), industry_raw.replace("_", " "))
         industry_name = search_term
-        quality_threshold = max(0, min(int(campaign.min_quality_score or 80), 100))
+        options = campaign.settings or {}
+        website_filter = options.get('website_filter', 'all')
+        if options.get('sub_industry'):
+            industry_name = f"{options['sub_industry']} {industry_name}"
+        quality_threshold = max(0, min(int(campaign.min_quality_score if campaign.min_quality_score is not None else 80), 100))
         target_quantity = max(1, int(campaign.target_quantity or 1))
         locations = db.query(CampaignLocation).filter(CampaignLocation.campaign_id == campaign_id).all()
         if not locations:
@@ -663,12 +677,14 @@ def process_campaign_task(campaign_id: int):
         test_business_ids = db.query(BusinessSource.business_id).filter(BusinessSource.source.in_(("mock", "fixture")))
         resumable_businesses = (
             db.query(Business)
-            .filter(Business.campaign_id == campaign_id, Business.status.in_(resumable_statuses))
+            .filter(Business.campaign_id == campaign_id, Business.status.in_(resumable_statuses), Business.deleted_at.is_(None))
             .filter(~Business.id.in_(test_business_ids))
             .all()
         )
-        provider = get_discovery_provider()
-        discovery_needed = max(0, target_quantity - len(resumable_businesses))
+        already_qualified = db.query(Business).filter(Business.campaign_id == campaign_id, Business.status == 'qualified', Business.deleted_at.is_(None)).count()
+        remaining_target = max(0, target_quantity - already_qualified)
+        provider = get_discovery_provider(options.get('discovery_channels')) if options.get('discovery_channels') else get_discovery_provider()
+        discovery_needed = max(0, remaining_target - len(resumable_businesses))
         # Oversample candidate pool up to twice the remaining target (bounded at 1,000)
         fetch_limit = min(1000, max(discovery_needed * 2, 20)) if discovery_needed else 0
         per_location_limit = max(1, math.ceil(fetch_limit / len(locations))) if fetch_limit else 0
@@ -690,17 +706,21 @@ def process_campaign_task(campaign_id: int):
             raw_businesses.extend(batch)
 
         dedupe = DeduplicationEngine()
-        unique_businesses = dedupe.deduplicate(raw_businesses)
+        unique_businesses = sorted(dedupe.deduplicate(raw_businesses), key=candidate_priority, reverse=True)
         saved_businesses: List[Business] = list(resumable_businesses)
+        new_candidates = 0
         for raw in unique_businesses:
-            if len(saved_businesses) >= fetch_limit:
+            if new_candidates >= fetch_limit:
                 break
             if not raw.get("name"):
+                continue
+            presence = 'has_website' if clean_website_url(raw.get('website_url')) else raw.get('website_status', 'unknown')
+            if website_filter != 'all' and presence != website_filter:
                 continue
             existing = _existing_business(db, raw)
             if existing:
                 if existing.campaign_id == campaign_id:
-                    if existing not in saved_businesses:
+                    if existing.status in resumable_statuses and existing not in saved_businesses:
                         saved_businesses.append(existing)
                     continue
                 # Never re-appropriate or repeat an already discovered lead in a new campaign
@@ -734,25 +754,30 @@ def process_campaign_task(campaign_id: int):
             db.add(business)
             db.flush()
             source = raw.get("source_metadata") or {}
-            db.add(BusinessSource(
-                business_id=business.id,
-                source=source.get("source") or "unknown",
-                source_id=business.google_place_id,
-                source_url=raw.get("source_url"),
-            ))
+            for discovery_source in raw.get('sources') or [{'channel': source.get('channel') or source.get('source') or 'unknown', 'url': raw.get('source_url')}]:
+                db.add(BusinessSource(business_id=business.id, source=discovery_source['channel'],
+                                      source_id=business.google_place_id, source_url=discovery_source.get('url')))
+            db.add(WebsiteEvidence(business_id=business.id, evidence_type='website_presence', observed_value=presence,
+                finding='Official website found' if presence == 'has_website' else 'No official website found in listing and follow-up search' if presence == 'no_website' else 'Website lookup incomplete; presence unknown',
+                confidence=0.8 if presence != 'unknown' else 0.0))
             saved_businesses.append(business)
+            new_candidates += 1
         db.commit()
 
         crawler = WebsiteIntelligenceEngine()
         scorer = ScoringEngine(industry_config)
         ai_sdr = GroqProvider()
-        qualified_count = 0
+        qualified_count = already_qualified
         audited_count = 0
         enriched_count = 0
 
         for business in saved_businesses:
             if qualified_count >= target_quantity:
                 break
+            if business.deleted_at is not None or business.status == 'qualified':
+                continue
+            if (website_filter == 'no_website' and business.website_url) or (website_filter == 'has_website' and not business.website_url):
+                continue
             if not business.website_url:
                 enriched_count += _qualify_no_website_business(db, business)
                 if business.status == "qualified":
@@ -765,6 +790,7 @@ def process_campaign_task(campaign_id: int):
                 if _is_junk_website(business.website_url):
                     print(f"Skipping junk website for {business.name}: {business.website_url}")
                     business.website_url = None
+                    business.website_domain = None
                     # A directory/social link is not an official site. Process
                     # it as a no-website lead in this same run instead of
                     # re-queuing it and silently losing the contact work.
@@ -852,7 +878,6 @@ def process_campaign_task(campaign_id: int):
             # Clean up old records before creating new ones on a re-run
             db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
             db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
-            db.query(Score).filter(Score.business_id == business.id).delete()
             
             opportunity = Opportunity(
 
@@ -904,20 +929,11 @@ def process_campaign_task(campaign_id: int):
             if final_status == "qualified":
                 qualified_count += 1
 
-        # Remove unused reserve candidates still in researching state
-        unreached_businesses = (
-            db.query(Business)
-            .filter(Business.campaign_id == campaign_id, Business.status == "researching")
-            .all()
-        )
-        for u in unreached_businesses:
-            db.query(BusinessSource).filter(BusinessSource.business_id == u.id).delete()
-            db.delete(u)
-        db.commit()
+        # Keep unused reserve candidates and their evidence for a later resume.
 
         total_qualified = (
             db.query(Business)
-            .filter(Business.campaign_id == campaign_id, Business.status == "qualified")
+            .filter(Business.campaign_id == campaign_id, Business.status == "qualified", Business.deleted_at.is_(None))
             .count()
         )
         total_delivered = (
@@ -929,6 +945,9 @@ def process_campaign_task(campaign_id: int):
         job.status = campaign.status
         job.completed_at = datetime.now(timezone.utc)
         job.metrics = {
+            "channel_errors": getattr(provider, 'channel_errors', {}),
+            "discovery_channels": options.get('discovery_channels', ['google_maps']),
+            "website_filter": website_filter,
             "discovered": total_delivered,
             "deduplicated": len(unique_businesses),
             "saved": total_delivered,
