@@ -22,10 +22,12 @@ const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
+    // Next.js route handlers in src/app/api/auth/* handle all /api/auth/* requests.
+    // Only non-auth /api/* requests are proxied to the FastAPI backend.
     return [
       {
-        source: '/api/:path*',
-        destination: apiUrl + '/api/:path*',
+        source: '/api/((?!auth/).*)',
+        destination: `${apiUrl}/api/:path*`,
       },
     ];
   }
