@@ -44,7 +44,7 @@ def authorize_request(request: Request, db: Session = Depends(get_db)):
     mutating = request.method not in {"GET", "HEAD", "OPTIONS"} or sensitive_get
     if mutating and request.cookies.get("access_token"):
         configured = {value.strip().rstrip("/") for value in os.getenv("FRONTEND_ORIGIN", "").split(",") if value.strip()}
-        defaults = {"http://localhost:3001", "http://127.0.0.1:3001", "http://localhost:3000", "http://127.0.0.1:3000", "https://devacia-frontend.onrender.com"}
+        defaults = {"http://localhost:3001", "http://127.0.0.1:3001", "http://localhost:3000", "http://127.0.0.1:3000", "https://devacia-frontend.onrender.com", "https://signaldevos.netlify.app"}
         origins = configured | defaults
         req_origin = (request.headers.get("origin") or "").rstrip("/")
         if not req_origin and request.headers.get("referer"):

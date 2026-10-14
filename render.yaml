@@ -46,7 +46,7 @@ services:
       # Set this to the public Devacia frontend URL. Keeping it explicit avoids
       # credentialed CORS requests from arbitrary origins.
       - key: FRONTEND_ORIGIN
-        value: https://devacia-frontend.onrender.com
+        value: https://devacia-frontend.onrender.com,https://signaldevos.netlify.app
 
   # 2. Next.js Frontend (Docker)
   - type: web

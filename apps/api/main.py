@@ -264,7 +264,7 @@ def migrate_upload(payload: dict, db: Session = Depends(get_db)):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list({origin.strip() for origin in os.getenv("FRONTEND_ORIGIN", "https://devacia-frontend.onrender.com,http://localhost:3001,http://127.0.0.1:3001").split(",") if origin.strip()} | {"https://devacia-frontend.onrender.com", "http://localhost:3001", "http://127.0.0.1:3001"}),
+    allow_origins=list({origin.strip() for origin in os.getenv("FRONTEND_ORIGIN", "https://devacia-frontend.onrender.com,http://localhost:3001,http://127.0.0.1:3001").split(",") if origin.strip()} | {"https://devacia-frontend.onrender.com", "https://signaldevos.netlify.app", "http://localhost:3001", "http://127.0.0.1:3001"}),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
