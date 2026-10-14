@@ -57,6 +57,9 @@ def test_campaign_generation_status_resume_and_recovery(setup):
     cid = response.json()['campaign_id']
     status = client.get(f'/api/campaigns/{cid}/status',headers=auth)
     assert status.status_code == 200 and status.json()['status'] == 'completed'
+    assert status.json()['website_filter'] == 'no_website'
+    assert [stage['key'] for stage in status.json()['stages']] == ['discovery', 'enrichment', 'ai_sdr']
+    assert status.json()['stages'][-1]['label'] == 'No-Website Opportunity Scoring'
     leads = client.get(f'/api/crm/leads?campaign_id={cid}&website_filter=no_website',headers=auth).json()['leads']
     assert len(leads) == 2 and all(lead['data_mode']=='synthetic' for lead in leads)
     assert client.patch(f'/api/campaigns/{cid}/contact-options',headers=auth,json={'phone_enabled':True}).status_code == 200

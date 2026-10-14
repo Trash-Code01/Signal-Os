@@ -195,3 +195,19 @@ def test_resume_can_add_candidates_when_pending_pool_exceeds_fetch_budget(factor
     monkeypatch.setattr(worker, 'get_discovery_provider', lambda: provider)
     result = worker.process_campaign_task(cid)
     assert result['qualified'] == 26, result
+
+
+def test_no_website_campaign_qualifies_listing_without_crawling(factory, monkeypatch):
+    with factory() as db:
+        cid = campaign(db, target=1, threshold=0, website_filter='no_website')
+    provider = type('Provider', (), {'discover': AsyncMock(return_value=[{
+        'name': 'Listing-only business', 'city': 'Austin', 'country': 'USA',
+        'primary_phone': '+1 512 555 0123', 'website_status': 'no_website',
+        'source': 'google_maps', 'source_url': 'https://google.com/maps/example',
+    }])})()
+    monkeypatch.setattr(worker, 'get_discovery_provider', lambda: provider)
+    crawl = AsyncMock(side_effect=AssertionError('No-website campaigns must not crawl'))
+    monkeypatch.setattr(worker.WebsiteIntelligenceEngine, 'audit_website', crawl)
+    result = worker.process_campaign_task(cid)
+    assert result['qualified'] == 1, result
+    crawl.assert_not_awaited()

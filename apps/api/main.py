@@ -158,7 +158,8 @@ def health_check():
         db_ok = True
     except Exception as exc:
         db_err = str(exc)
-    res = {"status": "ok", "db": "connected" if db_ok else "unreachable"}
+    res = {"status": "ok", "db": "connected" if db_ok else "unreachable",
+           "revision": os.getenv("RENDER_GIT_COMMIT") or None}
     if db_err:
         res["db_error"] = db_err[:250]
     return res
@@ -369,15 +370,17 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     )
     discovered = active_business.count()
     websites = (
-        db.query(Website)
+        db.query(Website.business_id)
         .join(Business)
         .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+        .distinct()
         .count()
     )
     opportunities = (
-        db.query(Opportunity)
+        db.query(Opportunity.business_id)
         .join(Business)
         .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+        .distinct()
         .count()
     )
     enriched = (
@@ -467,6 +470,36 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
         {"key": "enrichment",  "label": f"Contact Enrichment ({enriched} found)" if enriched > 0 else "Contact Enrichment", "status": enrichment_status,  "count": enriched_businesses if enriched_businesses > 0 else min(enriched, discovered), "total": discovered if discovered > 0 else total_target},
         {"key": "ai_sdr",      "label": "AI SDR Analysis & Scoring",          "status": ai_status,          "count": opportunities,"total": discovered if discovered > 0 else total_target},
     ]
+
+    website_filter = (campaign.settings or {}).get('website_filter', 'all')
+    if website_filter == 'no_website':
+        # These leads are qualified from listing/search evidence, without
+        # creating a website audit or invoking the website AI analysis path.
+        public_contacts = active_business.filter(or_(
+            func.length(func.trim(Business.primary_phone)) > 0,
+            Business.id.in_(db.query(DecisionMaker.business_id)),
+        )).count()
+        scored = (db.query(Score.business_id).join(Business)
+                  .filter(Business.campaign_id == campaign_id, Business.deleted_at.is_(None))
+                  .distinct().count())
+        research_target = min(discovered, total_target) if discovered else total_target
+
+        def research_status(count):
+            if is_terminal:
+                return 'done' if research_target > 0 and count >= research_target else 'partial' if count else 'pending'
+            return 'running' if is_running and discovered else 'pending'
+
+        stages = [
+            {"key": "discovery", "label": "Discovery & Website Presence Check", "status": discovery_status,
+             "count": discovered, "total": max(total_target, discovered),
+             "description": "Finds businesses and checks listings and search results for an official website."},
+            {"key": "enrichment", "label": "Public Business Contacts", "status": research_status(public_contacts),
+             "count": public_contacts, "total": max(research_target, public_contacts),
+             "description": "Collects available business contact details from public listings and enabled lookups. No website crawl."},
+            {"key": "ai_sdr", "label": "No-Website Opportunity Scoring", "status": research_status(scored),
+             "count": scored, "total": max(research_target, scored),
+             "description": "Ranks website-presence evidence, listing activity and contactability. No website audit or website AI analysis."},
+        ]
     
     yield_pct = min(100, round((qualified / total_target) * 100)) if total_target > 0 else 100
     shortfall = max(0, total_target - qualified)
@@ -475,6 +508,7 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
         "status": campaign.status,
         "terminal": is_terminal,
         "campaign_id": campaign.id,
+        "website_filter": website_filter,
         "data_mode": (campaign.settings or {}).get("data_mode") or ("synthetic" if IS_STAGING else "live"),
         "contact_options": {"personal_email_enabled": bool((campaign.settings or {}).get("personal_email_enabled", False)), "phone_enabled": bool((campaign.settings or {}).get("phone_enabled", False))},
         "name": campaign.name,
@@ -533,15 +567,29 @@ def _dispatch_task(task_func, *args, **kwargs):
         thread.start()
         return DummyTask()
     try:
-        return task_func.apply_async(args=list(args), kwargs=kwargs, queue="devacia_queue")
+        if not IS_STAGING:
+            from worker import celery_app
+            queues = celery_app.control.inspect(timeout=2).active_queues() or {}
+            if not any(queue.get('name') == 'devacia_queue' for worker_queues in queues.values() for queue in worker_queues):
+                raise HTTPException(503, 'Campaign worker is unavailable. Retry after it restarts.')
+        return task_func.apply_async(args=list(args), kwargs=kwargs, queue="devacia_queue", retry=False)
+    except HTTPException:
+        raise
     except Exception as exc:
-        print(f"Celery dispatch failed ({exc}); running task in background fallback thread.")
-        import threading
-        class FallbackTask:
-            id = f"fallback-thread-{args[0] if args else 'task'}"
-        thread = threading.Thread(target=task_func, args=args, kwargs=kwargs, daemon=True)
-        thread.start()
-        return FallbackTask()
+        print(f"Campaign dispatch failed: {type(exc).__name__}")
+        raise HTTPException(503, 'Campaign queue is unavailable. Retry after the queue and worker recover.') from exc
+
+
+def _dispatch_campaign(db, campaign):
+    """Persist dispatch failures so a failed enqueue cannot strand a campaign."""
+    try:
+        return _dispatch_task(process_campaign_task, campaign.id)
+    except HTTPException as exc:
+        campaign.status = 'failed'
+        db.add(JobRun(campaign_id=campaign.id, stage='dispatch', status='failed',
+                      completed_at=datetime.now(timezone.utc), error_message=str(exc.detail)))
+        db.commit()
+        raise
 
 
 @app.post("/api/campaigns/{campaign_id}/resume", status_code=202)
@@ -587,7 +635,7 @@ def resume_campaign(campaign_id: int, db: Session = Depends(get_db), user: User 
     campaign.status = "processing"
     db.commit()
     from worker import process_campaign_task
-    task = _dispatch_task(process_campaign_task, campaign.id)
+    task = _dispatch_campaign(db, campaign)
     return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id, "remaining": remaining}
 
 
@@ -704,7 +752,7 @@ def create_and_start_campaign(req: CampaignCreateRequest, db: Session = Depends(
     
         # Trigger worker
         from worker import process_campaign_task
-        task = _dispatch_task(process_campaign_task, campaign.id)
+        task = _dispatch_campaign(db, campaign)
         return {"status": "accepted", "campaign_id": campaign.id, "task_id": task.id}
 
     except HTTPException:

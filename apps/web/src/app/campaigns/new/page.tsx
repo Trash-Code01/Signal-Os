@@ -21,6 +21,15 @@ export default function NewCampaignPage() {
   const router = useRouter();
   const { user } = useSession();
   const [error, setError] = useState('');
+  const [discoveryMode, setDiscoveryMode] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/environment', { cache: 'no-store', signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => { if (data?.discovery_mode) setDiscoveryMode(data.discovery_mode); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
   const [options, setOptions] = useState<LookupOptions>({ personal_email_enabled: false, phone_enabled: false });
   useEffect(() => {
     if (user) {
@@ -136,10 +145,15 @@ export default function NewCampaignPage() {
   return (
     <div className="p-4 md:p-10 max-w-4xl pb-24 md:pb-10 mx-auto">
       {error && <p role="alert" className="mb-4 text-red-400 bg-red-950/40 border border-red-800/50 p-3 rounded-xl text-sm">{error}</p>}
-      {process.env.NEXT_PUBLIC_APP_ENV === 'staging' && (
+      {(discoveryMode === 'mock' || discoveryMode === 'fixture') && (
         <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
-          <strong>Staging test run:</strong> campaigns create synthetic workflow records only. No real businesses, websites, emails, or phone numbers are scraped. Run production for live lead research.
+          <strong>Test discovery mode:</strong> discovery uses sample or fixture records. These results are not newly discovered sales leads.
         </div>
+      )}
+      {discoveryMode === 'live' && (
+        <p className="mb-4 rounded-xl border border-sky-500/30 bg-sky-500/10 p-4 text-sm text-sky-200">
+          Live discovery is enabled. Searches use provider credits, including when contact lookups are off.
+        </p>
       )}
       {/* Header */}
       <div className="mb-8 md:mb-10">

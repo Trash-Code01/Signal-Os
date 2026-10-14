@@ -54,6 +54,11 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     broker_connection_retry_on_startup=True,
+    broker_connection_timeout=5,
+    broker_transport_options={'socket_connect_timeout': 5, 'socket_timeout': 5, 'retry_on_timeout': False},
+    task_publish_retry=False,
+    task_default_queue='devacia_queue',
+    worker_prefetch_multiplier=1,
 )
 if redis_url.startswith("rediss://"):
     import ssl

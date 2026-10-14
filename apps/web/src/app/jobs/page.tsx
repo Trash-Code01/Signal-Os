@@ -27,6 +27,7 @@ interface Stage {
   status: StageStatus;
   count?: number;
   total?: number;
+  description?: string;
 }
 
 const STAGE_METADATA: Record<string, { desc: string }> = {
@@ -118,7 +119,8 @@ function ProgressBar({ count = 0, total = 100, isDone = false, isPartial = false
 function JobsContent() {
   const searchParams = useSearchParams();
   const campaignId = searchParams.get('campaign');
-  const [stages, setStages] = useState<Stage[]>(PIPELINE_STAGES);
+  const [stages, setStages] = useState<Stage[]>([]);
+  const [websiteFilter, setWebsiteFilter] = useState('all');
   const [stats, setStats] = useState({
     discovered: 0,
     qualified: 0,
@@ -209,6 +211,7 @@ function JobsContent() {
         if (res.ok) {
           const data = await res.json();
           setStages(data.stages || PIPELINE_STAGES);
+          setWebsiteFilter(data.website_filter || 'all');
           setCampaignStatus(data.status || 'processing');
           setDataMode(data.data_mode === 'synthetic' ? 'synthetic' : 'live');
           setCampaignName(data.name || `Campaign #${campaignId}`);
@@ -238,6 +241,7 @@ function JobsContent() {
           });
 
           if (data.terminal) {
+            setResumeMessage('');
             isTerminalStatus = true;
             clearInterval(poller);
             clearInterval(ticker);
@@ -258,14 +262,14 @@ function JobsContent() {
   }, [campaignId, runRevision]);
 
   const terminalCount = stages.filter((s) => s.status === 'done' || s.status === 'partial' || s.status === 'failed').length;
-  const stagesPct = Math.round((terminalCount / stages.length) * 100);
+  const stagesPct = stages.length ? Math.round((terminalCount / stages.length) * 100) : 0;
   const isTerminal = ['completed', 'completed_partial', 'needs_review', 'failed'].includes(campaignStatus);
   const isGoodComplete = campaignStatus === 'completed' && stats.target_reached;
   const statusLabel = campaignStatus.replace(/_/g, ' ');
 
   const targetLeads = stats.target || 100;
   const leadProgressPct = Math.min(100, Math.round((stats.qualified / targetLeads) * 100));
-  const isShortfall = isTerminal && !stats.target_reached && campaignStatus !== 'failed';
+  const isShortfall = isTerminal && !stats.target_reached;
   const optionsLocked = isTerminal && !isShortfall;
 
   return (
@@ -292,7 +296,9 @@ function JobsContent() {
             </span>
           </div>
           <p className="text-zinc-400 text-xs mt-1">
-            Real-time stage execution, website intelligence crawler, and AI SDR scoring.
+            {websiteFilter === 'no_website'
+              ? 'Business discovery, website-presence checks, public contacts, and no-website opportunity scoring.'
+              : 'Real-time stage execution, website intelligence crawler, and AI SDR scoring.'}
           </p>
         </div>
 
@@ -356,7 +362,7 @@ function JobsContent() {
             <Zap className="w-3.5 h-3.5 text-violet-400" />
           </div>
           <div className="text-xl font-bold text-violet-300 font-mono">{stats.enriched}</div>
-          <div className="text-[10px] text-zinc-500 mt-1">Verified contacts</div>
+          <div className="text-[10px] text-zinc-500 mt-1">Enriched contact records</div>
         </div>
 
         <div className="bg-[#121214] border border-zinc-800/80 rounded-xl p-3.5">
@@ -429,7 +435,7 @@ function JobsContent() {
         <div className="px-6 py-4 border-b border-zinc-800/80 flex items-center justify-between">
           <div>
             <h2 className="text-sm font-bold text-white uppercase tracking-wider">Pipeline Stage Execution</h2>
-            <p className="text-xs text-zinc-400 mt-0.5">Each stage executes sequentially and gates lead quality.</p>
+            <p className="text-xs text-zinc-400 mt-0.5">{websiteFilter === 'no_website' ? 'Website crawling is skipped for this campaign. Leads are checked using public listing and search evidence.' : 'Each stage executes sequentially and gates lead quality.'}</p>
           </div>
           <span className="text-xs font-mono text-zinc-500">{stages.length} Active Steps</span>
         </div>
@@ -477,7 +483,7 @@ function JobsContent() {
                         )}
                         {isPartial && (
                           <span className="inline-flex items-center gap-1 text-xs text-amber-400 font-medium px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
-                            Target shortfall
+                            Partial
                           </span>
                         )}
                         {stage.status === 'pending' && (
@@ -486,7 +492,7 @@ function JobsContent() {
                       </div>
                     </div>
 
-                    <p className="text-xs text-zinc-400 mt-1">{meta.desc}</p>
+                    <p className="text-xs text-zinc-400 mt-1">{stage.description || meta.desc}</p>
 
                     {(isRunning || isDone || isPartial) && stage.count !== undefined && (
                       <ProgressBar count={stage.count} total={stage.total} isDone={isDone} isPartial={isPartial} />
@@ -532,8 +538,12 @@ function JobsContent() {
                 </span>
               </h3>
               <p className="text-xs text-zinc-300 mt-1">
-                {isShortfall
+                {campaignStatus === 'failed'
+                  ? 'Resolve the error above, then retry this campaign. Existing qualified leads are retained.'
+                  : isShortfall
                   ? `${stats.shortfall} more qualified leads are needed. Continue discovery to work toward the original target without repeating existing leads.`
+                  : websiteFilter === 'no_website'
+                  ? `${stats.qualified} no-website leads are in your CRM with public source evidence, available contacts, and opportunity scores.`
                   : `${stats.qualified} research-backed leads are organized with company dossiers, UX audits, scores, and outreach angles in your CRM.`}
               </p>
               {resumeMessage && <p className="text-xs text-amber-300 mt-2">{resumeMessage}</p>}
@@ -549,7 +559,7 @@ function JobsContent() {
                 className="inline-flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-bold px-5 py-3 rounded-xl text-sm transition disabled:opacity-50"
               >
                 <RotateCcw className={`w-4 h-4 ${resuming ? 'animate-spin' : ''}`} />
-                <span>{resuming ? 'Starting…' : `Continue for ${stats.shortfall} leads`}</span>
+                <span>{resuming ? 'Starting…' : campaignStatus === 'failed' ? 'Retry campaign' : `Continue for ${stats.shortfall} leads`}</span>
               </button>
             )}
             <Link

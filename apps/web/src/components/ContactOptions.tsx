@@ -16,14 +16,14 @@ export function ContactOptions({
       key: 'personal_email_enabled' as const,
       label: 'Personal work emails',
       description: 'Search Snov.io for verified personal work emails of decision-makers.',
-      offNotice: 'Default: Crawl website email only (No lookup credits used)',
+      offNotice: 'Default: Use available public business email (No lookup credits used)',
       onNotice: 'Active: Enriches lead with decision-maker personal email',
     },
     {
       key: 'phone_enabled' as const,
       label: 'Phone research',
       description: 'Search public contact sources for direct decision-maker phone lines.',
-      offNotice: 'Default: Crawl public business phone only (No lookup credits used)',
+      offNotice: 'Default: Use available public business phone (No lookup credits used)',
       onNotice: 'Active: Enriches lead with direct phone line & mobile',
     },
   ];
@@ -43,7 +43,7 @@ export function ContactOptions({
             </span>
           </h4>
           <p className="text-xs text-zinc-400 mt-0.5">
-            Default is <strong>OFF</strong>. When OFF, pipeline discovers leads and extracts public website email & phone without deducting contact credits.
+            Default is <strong>OFF</strong>. When OFF, the pipeline uses available public listing contacts and, for businesses with a website, website contacts without deducting contact lookup credits.
           </p>
         </div>
       </div>
@@ -116,7 +116,7 @@ export function ContactOptions({
       <div className="pt-2 border-t border-zinc-800/60 flex items-center gap-2 text-[11px] text-zinc-400">
         <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
         <span>
-          <strong>Toggle OFF (Default):</strong> The campaign still runs and delivers leads with crawled website email and phone.
+          <strong>Toggle OFF (Default):</strong> The campaign still runs. Contact details are included when available from public sources.
         </span>
       </div>
     </div>

@@ -26,6 +26,6 @@ COPY auth.py main.py worker.py start.sh ./
 # Expose port for FastAPI
 EXPOSE 8000
 
-# The API creates the new CRM tables safely at startup. The worker command is
-# overridden by docker-compose and starts only after the API service.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start both API and supervised campaign worker even without a host override.
+# A dedicated docker-compose worker can still override this command.
+CMD ["bash", "start.sh"]

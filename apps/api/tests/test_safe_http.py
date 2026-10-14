@@ -17,6 +17,19 @@ def _record(address: str, port: int = 443):
     return (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)
 
 
+def test_public_nat64_dns_answers_are_accepted():
+    resolver = lambda *args, **kwargs: [_record('34.10.149.3'), _record('64:ff9b::220a:9503')]
+    assert validate_public_http_url('https://business.example/', resolver=resolver) == 'https://business.example/'
+
+
+@pytest.mark.parametrize('address', ['64:ff9b::7f00:1', '64:ff9b::a00:1', '64:ff9b::a9fe:a9fe',
+                                     '64:ff9b::c0a8:1', '64:ff9b::e000:1', '64:ff9b::',
+                                     '64:ff9b::6440:1', '64:ff9b:1::220a:9503'])
+def test_nat64_never_allows_internal_or_non_global_destinations(address):
+    with pytest.raises(UnsafePublicUrl):
+        validate_public_http_url(f'https://[{address}]/')
+
+
 @pytest.mark.parametrize(
     "url",
     [

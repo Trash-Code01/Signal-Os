@@ -9,11 +9,29 @@ PORT="${PORT:-8000}"
 # which can race or deadlock and prevent the API from becoming ready.
 # Run any operator-requested Alembic upgrade separately, with writers stopped.
 
-# Start Celery worker in background if Redis is configured
-if [ -n "${REDIS_URL:-}" ]; then
-    echo "Starting Celery worker in background..."
-    celery -A worker.celery_app worker --loglevel=info -P threads -Q devacia_queue,celery &
+if [ "${ENVIRONMENT:-}" = "production" ] && [ -z "${REDIS_URL:-}" ]; then
+    echo "ERROR: REDIS_URL is required for production campaign processing."
+    exit 1
 fi
 
-echo "Launching Uvicorn on 0.0.0.0:${PORT}..."
-exec uvicorn main:app --host 0.0.0.0 --port "${PORT}"
+if [ -z "${REDIS_URL:-}" ]; then
+    exec uvicorn main:app --host 0.0.0.0 --port "${PORT}"
+fi
+
+# Supervise both processes. A healthy API must not conceal a dead worker.
+celery -A worker.celery_app worker --loglevel=info -P threads --concurrency=2 -Q devacia_queue,celery &
+worker_pid=$!
+uvicorn main:app --host 0.0.0.0 --port "${PORT}" &
+api_pid=$!
+cleanup() {
+    kill "$worker_pid" "$api_pid" 2>/dev/null || true
+    wait "$worker_pid" "$api_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 143' TERM INT
+# Check both children, including one that exits before supervision begins.
+while kill -0 "$worker_pid" 2>/dev/null && kill -0 "$api_pid" 2>/dev/null; do
+    sleep 1
+done
+echo "API or campaign worker exited; restarting the service."
+exit 1

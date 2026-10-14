@@ -18,6 +18,7 @@ class UnsafePublicUrl(ValueError):
 
 AddressResolver = Callable[..., Iterable[tuple[Any, Any, Any, Any, tuple[Any, ...]]]]
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+NAT64_PUBLIC_PREFIX = ipaddress.IPv6Network('64:ff9b::/96')
 
 
 def _validate_public_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
@@ -25,6 +26,13 @@ def _validate_public_address(value: str) -> ipaddress.IPv4Address | ipaddress.IP
         address = ipaddress.ip_address(value)
     except ValueError as exc:
         raise UnsafePublicUrl("The website hostname did not resolve to an IP address") from exc
+
+    # RFC 6052's well-known NAT64 prefix encodes the destination in the final
+    # 32 bits. Python marks the prefix reserved even for public destinations.
+    # Validate the embedded IPv4 address with exactly the same safety rules.
+    if isinstance(address, ipaddress.IPv6Address) and address in NAT64_PUBLIC_PREFIX:
+        _validate_public_address(str(ipaddress.IPv4Address(int(address) & 0xffffffff)))
+        return address
 
     # is_global is deliberately included in addition to the named categories. It
     # also excludes special-purpose ranges that are not consistently classified

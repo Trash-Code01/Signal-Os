@@ -4,7 +4,8 @@
   publish = ".next"
 
 [build.environment]
-  NEXT_PUBLIC_API_URL = "https://devacia-api.onrender.com"
+  API_URL = "https://devacia-backend.onrender.com"
+  NEXT_PUBLIC_API_URL = "https://devacia-backend.onrender.com"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
