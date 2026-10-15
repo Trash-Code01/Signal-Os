@@ -398,7 +398,7 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     )
     qualified = active_business.filter(Business.status == "qualified").count()
     needs_review = active_business.filter(Business.status.in_([
-        "needs_review", "needs_official_website", "needs_research", "needs_contact_enrichment"
+        "needs_review", "needs_official_website", "needs_research", "needs_contact_enrichment", "below_quality_threshold"
     ])).count()
     rejected = active_business.filter(Business.status.like("rejected%")).count()
     terminal_statuses = {"completed", "completed_partial", "needs_review", "failed"}
@@ -486,7 +486,7 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
 
         def research_status(count):
             if is_terminal:
-                return 'done' if research_target > 0 and count >= research_target else 'partial' if count else 'pending'
+                return 'done' if research_target > 0 and count >= research_target else 'partial'
             return 'running' if is_running and discovered else 'pending'
 
         stages = [
@@ -503,6 +503,12 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
     
     yield_pct = min(100, round((qualified / total_target) * 100)) if total_target > 0 else 100
     shortfall = max(0, total_target - qualified)
+    stop_reason = (job_run.metrics or {}).get('stop_reason') if job_run else None
+    stop_message = {
+        'search_exhausted': ' Selected search results are exhausted for this location and industry.',
+        'search_budget_reached': ' This run reached its search budget. Continue to search fresh pages.',
+        'provider_error': ' A discovery provider failed. Check the channel errors and retry.',
+    }.get(stop_reason, '') if is_terminal and shortfall else ''
 
     return {
         "status": campaign.status,
@@ -526,12 +532,14 @@ def get_campaign_status(campaign_id: int, db: Session = Depends(get_db)):
             "shortfall": shortfall,
             "target_reached": shortfall == 0,
         },
+        "stop_reason": stop_reason,
+        "discovery_rounds": (job_run.metrics or {}).get("discovery_rounds", 1) if job_run else 0,
         "channel_errors": (job_run.metrics or {}).get('channel_errors', {}) if job_run else {},
         "summary": (
             (job_run.error_message or 'Campaign failed. Check provider settings and retry.') if campaign.status == 'failed' and job_run else
             f"Target reached: {qualified} qualified leads delivered."
             if shortfall == 0
-            else f"{qualified} of {total_target} qualified leads delivered; {shortfall} still needed, {needs_review} need review, {rejected} rejected."
+            else f"{qualified} of {total_target} qualified leads delivered; {shortfall} still needed, {needs_review} need review, {rejected} rejected." + stop_message
         ),
         "stages": stages
     }

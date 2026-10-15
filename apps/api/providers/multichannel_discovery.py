@@ -26,6 +26,7 @@ CHANNEL_HOSTS = {
     'directories': ('yelp.com', 'yellowpages.com', 'justdial.com', 'bbb.org'),
     'facebook': ('facebook.com',), 'instagram': ('instagram.com',), 'linkedin': ('linkedin.com',),
 }
+QUERY_PREFIXES = ('', 'local ', 'small ', 'independent ')
 
 
 def parse_candidate(result, channel, city, state, country):
@@ -68,16 +69,45 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
         if not self.channels or any(c not in CHANNELS for c in self.channels):
             raise ValueError('Select at least one supported discovery channel.')
         self.channel_errors = {}
+        self.discovery_state = {}
+
+    def _page_state(self, channel, query, location):
+        return self.discovery_state.setdefault(f'{channel}|{query}|{location}', {})
+
+    def _prepare_page_state(self, channel, query, location):
+        state = self._page_state(channel, query, location)
+        page_limit = 50 if channel == 'google_maps' else 20
+        variant = state.get('query_variant', 0)
+        if (state.get('exhausted') or state.get('next_page', 1) > page_limit) and not state.get('provider_error'):
+            if variant + 1 < len(QUERY_PREFIXES):
+                # Refine the same industry in the same city after exhausting
+                # a query; never broaden the campaign's geography or filters.
+                state.clear()
+                state['query_variant'] = variant + 1
+        return state
+
+    @property
+    def has_more_results(self):
+        return any(not state.get('provider_error') and (
+                   state.get('query_variant', 0) + 1 < len(QUERY_PREFIXES) or
+                   (not state.get('exhausted') and state.get('next_page', 1) <=
+                   (50 if key.startswith('google_maps|') else 20)))
+                   for key, state in self.discovery_state.items())
 
     async def _search_channel(self, channel, query, location, limit):
         city, state, country = _parse_target_location(location)
         if not city or not country:
             raise ValueError('City and country are required.')
-        results, seen = [], set()
+        page_state = self._prepare_page_state(channel, query, location)
+        search_query = QUERY_PREFIXES[page_state.get('query_variant', 0)] + query
+        start_page = int(page_state.get('next_page', 1))
+        if page_state.get('exhausted') or start_page > 20:
+            return []
+        results, seen = [], set(page_state.get('seen', []))
         async with aiohttp.ClientSession(headers={'X-API-KEY': self.api_key}, timeout=aiohttp.ClientTimeout(total=30)) as session:
-            for page in range(1, min(20, math.ceil(limit / 10)) + 1):
+            for page in range(start_page, min(21, start_page + math.ceil(limit / 10))):
                 async with session.post('https://google.serper.dev/search', json={
-                    'q': f'{query} in {location} {CHANNEL_QUERIES[channel]}', 'num': 10, 'page': page,
+                    'q': f'{search_query} in {location} {CHANNEL_QUERIES[channel]}', 'num': 10, 'page': page,
                 }) as response:
                     if response.status != 200:
                         state, message = provider_failure(response.status, await response.text())
@@ -87,9 +117,12 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
                     report_provider_state('serper', 'active', 'Public business search completed.', response.status)
                 organic = payload.get('organic') or []
                 fresh = [r for r in organic if r.get('link') not in seen]
+                page_state['next_page'] = page + 1
                 if not fresh:
+                    page_state['exhausted'] = True
                     break
                 seen.update(r.get('link') for r in fresh)
+                page_state['seen'] = list(seen)
                 for item in fresh:
                     candidate = parse_candidate(item, channel, city, state, country)
                     if candidate and channel == 'google_search' and not self._is_official_business_website(item, candidate['name']):
@@ -102,7 +135,7 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
             websites = await asyncio.gather(*(self._fetch_website(session, b) for b in missing))
             for business, website in zip(missing, websites):
                 business['website_url'] = clean_website_url(website)
-        return results[:limit]
+        return results
 
     async def discover(self, query, location, industry, limit=None):
         if not self.api_key:
@@ -110,19 +143,28 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
         # A fresh semaphore belongs to each event loop (worker uses asyncio.run).
         self.lookup_semaphore = asyncio.Semaphore(5)
         limit = max(1, limit or 100)
-        per_channel = max(1, math.ceil(limit / len(self.channels)))
+        # A selected channel gets at least one complete page. Filtering and
+        # deduplication happen later; raw candidates are not the lead target.
+        per_channel = max(10, math.ceil(limit / len(self.channels)))
         maps_discover = super().discover
-        calls = [maps_discover(query, location, industry, per_channel) if c == 'google_maps'
-                 else self._search_channel(c, query, location, per_channel) for c in self.channels]
+        calls = []
+        for channel in self.channels:
+            if channel == 'google_maps':
+                state = self._prepare_page_state(channel, query, location)
+                search_query = QUERY_PREFIXES[state.get('query_variant', 0)] + query
+                calls.append(maps_discover(search_query, location, industry, per_channel, page_state=state))
+            else:
+                calls.append(self._search_channel(channel, query, location, per_channel))
         batches = await asyncio.gather(*calls, return_exceptions=True)
         candidates, successes = [], 0
         for channel, batch in zip(self.channels, batches):
             if isinstance(batch, Exception):
                 self.channel_errors[f'{location}: {channel}'] = str(batch)
+                self._page_state(channel, query, location).update(exhausted=True, provider_error=True)
             else:
                 successes += 1
                 candidates.extend(batch)
         if not successes:
             reasons = '; '.join(dict.fromkeys(str(batch) for batch in batches if isinstance(batch, Exception)))
             raise RuntimeError(f'All selected discovery channels failed. {reasons}')
-        return sorted(DeduplicationEngine().deduplicate(candidates), key=candidate_priority, reverse=True)[:limit]
+        return sorted(DeduplicationEngine().deduplicate(candidates), key=candidate_priority, reverse=True)

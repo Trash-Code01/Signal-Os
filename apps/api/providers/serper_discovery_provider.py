@@ -89,7 +89,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
             print(f"Error fetching website for {business.get('name')}: {e}")
         return None
 
-    async def discover(self, query: str, location: str, industry: str, limit=None) -> List[Dict[str, Any]]:
+    async def discover(self, query: str, location: str, industry: str, limit=None, page_state=None) -> List[Dict[str, Any]]:
         print(f"Serper discovering: {query} in {location} for {industry}")
 
         if not self.api_key:
@@ -101,7 +101,9 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
             report_provider_state("serper", "invalid_request", "Campaign city and country are required.")
             return []
 
-        url = "https://google.serper.dev/places"
+        # Maps includes public listing phones and full addresses; Places can
+        # omit these fields and leave no-website candidates uncontactable.
+        url = "https://google.serper.dev/maps"
         headers = {
             'X-API-KEY': self.api_key,
             'Content-Type': 'application/json'
@@ -114,18 +116,24 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         target_limit = max(1, limit or 100)
         # Larger campaigns need more than the first ten result pages. Stop at
         # 50 pages, the requested quantity, or the first empty/repeated page.
-        max_pages = min(50, (target_limit + 9) // 10)
-        seen_cids = set()
+        max_pages = min(50, (target_limit + 19) // 20)
+        page_state = page_state if page_state is not None else {}
+        seen_cids = set(page_state.get('seen', []))
+        start_page = int(page_state.get('next_page', 1))
+        if page_state.get('exhausted') or start_page > 50:
+            return []
 
         try:
             async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
-                for page in range(1, max_pages + 1):
+                for page in range(start_page, min(51, start_page + max_pages)):
                     if len(places) >= target_limit:
                         break
                     payload = {
                         "q": search_query,
                         "page": page,
                     }
+                    if page_state.get('ll'):
+                        payload['ll'] = page_state['ll']
                     data = None
                     for attempt in range(2):
                         async with session.post(url, json=payload) as response:
@@ -139,6 +147,9 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                                 break
 
                             page_places = data.get("places", [])
+                            if data.get('ll'):
+                                # Maps requires this location token on page 2+.
+                                page_state['ll'] = data['ll']
                             if page_places:
                                 report_provider_state("serper", "active", "Business discovery in progress.", response.status)
                                 break
@@ -148,26 +159,29 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
 
                     page_places = (data or {}).get("places", []) if data else []
                     if not page_places:
+                        page_state['exhausted'] = True
                         break
 
                     new_added = 0
                     for p in page_places:
-                        cid = p.get("placeId") or p.get("cid") or p.get("title")
+                        cid = p.get("cid") or p.get("placeId") or p.get("title")
                         if cid and cid in seen_cids:
                             continue
                         if cid:
                             seen_cids.add(cid)
                         places.append(p)
                         new_added += 1
-                        if len(places) >= target_limit:
-                            break
-
+                    page_state['next_page'] = page + 1
+                    page_state['seen'] = list(seen_cids)
                     if new_added == 0:
+                        page_state['exhausted'] = True
                         break
 
                 for place in places:
                     address_str = place.get("address", "")
-                    place_identifier = place.get("placeId") or place.get("cid")
+                    # Keep the existing CID identity stable across the endpoint
+                    # change, so resumes do not import the same listing twice.
+                    place_identifier = place.get("cid") or place.get("placeId")
                     source_url = place.get("link") or (
                         f"https://www.google.com/maps?cid={place.get('cid')}" if place.get("cid") else None
                     )
@@ -198,7 +212,7 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                         "review_count": place.get("ratingCount"),
                         "source_url": source_url,
                         "source_metadata": {
-                            "source": "serper_places",
+                            "source": "serper_maps",
                             "channel": "google_maps",
                             "rank_group": place.get("position"),
                             "website_source": "google_business_profile" if website else None,

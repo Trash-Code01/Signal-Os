@@ -693,86 +693,6 @@ def process_campaign_task(campaign_id: int):
         already_qualified = db.query(Business).filter(Business.campaign_id == campaign_id, Business.status == 'qualified', Business.deleted_at.is_(None)).count()
         remaining_target = max(0, target_quantity - already_qualified)
         provider = get_discovery_provider(options.get('discovery_channels')) if options.get('discovery_channels') else get_discovery_provider()
-        discovery_needed = max(0, remaining_target - len(resumable_businesses))
-        # Oversample candidate pool up to twice the remaining target (bounded at 1,000)
-        fetch_limit = min(1000, max(discovery_needed * 2, 20)) if discovery_needed else 0
-        per_location_limit = max(1, math.ceil(fetch_limit / len(locations))) if fetch_limit else 0
-        raw_businesses: List[Dict[str, Any]] = []
-        for location in locations:
-            if not discovery_needed:
-                break
-            remaining = fetch_limit - len(raw_businesses)
-            if remaining <= 0:
-                break
-            batch = asyncio.run(provider.discover(
-                query=industry_name,
-                location=_location_label(location),
-                industry=industry_name,
-                limit=min(per_location_limit, remaining),
-            ))
-            for item in batch:
-                item["_campaign_location"] = location
-            raw_businesses.extend(batch)
-
-        dedupe = DeduplicationEngine()
-        unique_businesses = sorted(dedupe.deduplicate(raw_businesses), key=candidate_priority, reverse=True)
-        saved_businesses: List[Business] = list(resumable_businesses)
-        new_candidates = 0
-        for raw in unique_businesses:
-            if new_candidates >= fetch_limit:
-                break
-            if not raw.get("name"):
-                continue
-            presence = 'has_website' if clean_website_url(raw.get('website_url')) else raw.get('website_status', 'unknown')
-            if website_filter != 'all' and presence != website_filter:
-                continue
-            existing = _existing_business(db, raw)
-            if existing:
-                if existing.campaign_id == campaign_id:
-                    if existing.status in resumable_statuses and existing not in saved_businesses:
-                        saved_businesses.append(existing)
-                    continue
-                # Never re-appropriate or repeat an already discovered lead in a new campaign
-                print(f"Skipping previously gathered lead '{raw.get('name')}' (already in Campaign {existing.campaign_id}) to prevent duplicates.")
-                continue
-            loc = raw.get("_campaign_location") or (locations[0] if locations else None)
-            loc_country = loc.country if loc and loc.country else raw.get("country")
-            loc_state = loc.region_state if loc else raw.get("state_province")
-            loc_city = loc.city if loc and loc.city else raw.get("city")
-            primary_phone = clean_phone_for_country(raw.get("primary_phone"), loc_country)
-            business = Business(
-                campaign_id=campaign_id,
-                name=raw["name"].strip(),
-                normalized_name=raw["name"].strip().lower(),
-                industry=industry_name,
-                country=loc_country,
-                state_province=loc_state,
-                city=loc_city,
-                postal_code=raw.get("postal_code"),
-                address=raw.get("address"),
-                latitude=raw.get("latitude"),
-                longitude=raw.get("longitude"),
-                primary_phone=primary_phone,
-                website_url=clean_website_url(raw.get("website_url")),
-                website_domain=_domain(clean_website_url(raw.get("website_url"))),
-                google_place_id=str(raw.get("google_place_id")) if raw.get("google_place_id") else None,
-                rating=raw.get("rating"),
-                review_count=raw.get("review_count"),
-                status="researching",
-            )
-            db.add(business)
-            db.flush()
-            source = raw.get("source_metadata") or {}
-            for discovery_source in raw.get('sources') or [{'channel': source.get('channel') or source.get('source') or 'unknown', 'url': raw.get('source_url')}]:
-                db.add(BusinessSource(business_id=business.id, source=discovery_source['channel'],
-                                      source_id=business.google_place_id, source_url=discovery_source.get('url')))
-            db.add(WebsiteEvidence(business_id=business.id, evidence_type='website_presence', observed_value=presence,
-                finding='Official website found' if presence == 'has_website' else 'No official website found in listing and follow-up search' if presence == 'no_website' else 'Website lookup incomplete; presence unknown',
-                confidence=0.8 if presence != 'unknown' else 0.0))
-            saved_businesses.append(business)
-            new_candidates += 1
-        db.commit()
-
         crawler = WebsiteIntelligenceEngine()
         scorer = ScoringEngine(industry_config)
         ai_sdr = GroqProvider()
@@ -780,163 +700,284 @@ def process_campaign_task(campaign_id: int):
         audited_count = 0
         enriched_count = 0
 
-        for business in saved_businesses:
-            if qualified_count >= target_quantity:
-                break
-            if business.deleted_at is not None or business.status == 'qualified':
-                continue
-            if (website_filter == 'no_website' and business.website_url) or (website_filter == 'has_website' and not business.website_url):
-                continue
-            if not business.website_url:
-                enriched_count += _qualify_no_website_business(db, business)
-                if business.status == "qualified":
-                    qualified_count += 1
-                continue
+        # Keep searching fresh pages until the *qualified* target is reached.
+        # Limits prevent runaway credit use when the selected market is exhausted.
+        max_rounds = 50
+        candidate_budget = min(10000, max(1000, target_quantity * 300))
+        processed_ids, seen_candidates = set(), set()
+        raw_count = deduplicated_count = rounds = 0
+        stop_reason = 'target_reached'
+        if hasattr(provider, 'discovery_state'):
+            from copy import deepcopy
+            provider.discovery_state = deepcopy(options.get('discovery_state') or {})
+            # A manual resume can retry failed providers after credits recover.
+            for state in provider.discovery_state.values():
+                if state.pop('provider_error', False):
+                    state.pop('exhausted', None)
+        while qualified_count < target_quantity:
+            rounds += 1
+            remaining_target = target_quantity - qualified_count
+            discovery_needed = max(0, remaining_target - len(resumable_businesses))
+            # Oversample candidate pool up to twice the remaining target (bounded at 1,000)
+            fetch_limit = min(1000, max(discovery_needed * 2, 20)) if discovery_needed else 0
+            per_location_limit = max(1, math.ceil(fetch_limit / len(locations))) if fetch_limit else 0
+            raw_businesses: List[Dict[str, Any]] = []
+            for location in locations:
+                if not discovery_needed:
+                    break
+                batch = asyncio.run(provider.discover(
+                    query=industry_name,
+                    location=_location_label(location),
+                    industry=industry_name,
+                    limit=per_location_limit,
+                ))
+                for item in batch:
+                    item["_campaign_location"] = location
+                raw_businesses.extend(batch)
 
-            try:
-                # Guard: if the URL is a directory/Wikipedia/chain HQ, treat as no-website
-                from providers.serper_discovery_provider import _is_junk_website
-                if _is_junk_website(business.website_url):
-                    print(f"Skipping junk website for {business.name}: {business.website_url}")
-                    business.website_url = None
-                    business.website_domain = None
-                    # A directory/social link is not an official site. Process
-                    # it as a no-website lead in this same run instead of
-                    # re-queuing it and silently losing the contact work.
+            raw_count += len(raw_businesses)
+            fresh_keys = {str((item.get('google_place_id'), item.get('name'), item.get('city'), item.get('website_url'))) for item in raw_businesses}
+            fresh_count = len(fresh_keys - seen_candidates)
+            seen_candidates.update(fresh_keys)
+            dedupe = DeduplicationEngine()
+            unique_businesses = sorted(dedupe.deduplicate(raw_businesses), key=candidate_priority, reverse=True)
+            deduplicated_count += len(unique_businesses)
+            saved_businesses: List[Business] = list(resumable_businesses)
+            new_candidates = 0
+            for raw in unique_businesses:
+                if not raw.get("name"):
+                    continue
+                presence = 'has_website' if clean_website_url(raw.get('website_url')) else raw.get('website_status', 'unknown')
+                if website_filter != 'all' and presence != website_filter:
+                    continue
+                existing = _existing_business(db, raw)
+                if existing:
+                    if existing.campaign_id == campaign_id:
+                        if existing.id not in processed_ids and existing.status in resumable_statuses and existing not in saved_businesses:
+                            saved_businesses.append(existing)
+                        continue
+                    # Never re-appropriate or repeat an already discovered lead in a new campaign
+                    print(f"Skipping previously gathered lead '{raw.get('name')}' (already in Campaign {existing.campaign_id}) to prevent duplicates.")
+                    continue
+                loc = raw.get("_campaign_location") or (locations[0] if locations else None)
+                loc_country = loc.country if loc and loc.country else raw.get("country")
+                loc_state = loc.region_state if loc else raw.get("state_province")
+                loc_city = loc.city if loc and loc.city else raw.get("city")
+                primary_phone = clean_phone_for_country(raw.get("primary_phone"), loc_country)
+                business = Business(
+                    campaign_id=campaign_id,
+                    name=raw["name"].strip(),
+                    normalized_name=raw["name"].strip().lower(),
+                    industry=industry_name,
+                    country=loc_country,
+                    state_province=loc_state,
+                    city=loc_city,
+                    postal_code=raw.get("postal_code"),
+                    address=raw.get("address"),
+                    latitude=raw.get("latitude"),
+                    longitude=raw.get("longitude"),
+                    primary_phone=primary_phone,
+                    website_url=clean_website_url(raw.get("website_url")),
+                    website_domain=_domain(clean_website_url(raw.get("website_url"))),
+                    google_place_id=str(raw.get("google_place_id")) if raw.get("google_place_id") else None,
+                    rating=raw.get("rating"),
+                    review_count=raw.get("review_count"),
+                    status="researching",
+                )
+                db.add(business)
+                db.flush()
+                source = raw.get("source_metadata") or {}
+                for discovery_source in raw.get('sources') or [{'channel': source.get('channel') or source.get('source') or 'unknown', 'url': raw.get('source_url')}]:
+                    db.add(BusinessSource(business_id=business.id, source=discovery_source['channel'],
+                                          source_id=business.google_place_id, source_url=discovery_source.get('url')))
+                db.add(WebsiteEvidence(business_id=business.id, evidence_type='website_presence', observed_value=presence,
+                    finding='Official website found' if presence == 'has_website' else 'No official website found in listing and follow-up search' if presence == 'no_website' else 'Website lookup incomplete; presence unknown',
+                    confidence=0.8 if presence != 'unknown' else 0.0))
+                saved_businesses.append(business)
+                new_candidates += 1
+            db.commit()
+
+            for business in saved_businesses:
+                if qualified_count >= target_quantity:
+                    break
+                if business.id in processed_ids or business.deleted_at is not None or business.status == 'qualified':
+                    continue
+                processed_ids.add(business.id)
+                if (website_filter == 'no_website' and business.website_url) or (website_filter == 'has_website' and not business.website_url):
+                    continue
+                if not business.website_url:
                     enriched_count += _qualify_no_website_business(db, business)
                     if business.status == "qualified":
                         qualified_count += 1
                     continue
 
-                audit = asyncio.run(asyncio.wait_for(crawler.audit_website(business.website_url), timeout=240.0))
-            except Exception as e:
-                print(f"Crawler timeout/error for {business.website_url}: {e}")
-                _set_business_status(db, business, "rejected_unreachable")
-                db.commit()
-                continue
+                try:
+                    # Guard: if the URL is a directory/Wikipedia/chain HQ, treat as no-website
+                    from providers.serper_discovery_provider import _is_junk_website
+                    if _is_junk_website(business.website_url):
+                        print(f"Skipping junk website for {business.name}: {business.website_url}")
+                        business.website_url = None
+                        business.website_domain = None
+                        # A directory/social link is not an official site. Process
+                        # it as a no-website lead in this same run instead of
+                        # re-queuing it and silently losing the contact work.
+                        enriched_count += _qualify_no_website_business(db, business)
+                        if business.status == "qualified":
+                            qualified_count += 1
+                        continue
 
-            _, evidence = _persist_website_research(db, business, audit)
-            audited_count += 1
-            if not audit.get("is_live"):
-                _set_business_status(db, business, "rejected_unreachable")
-                db.commit()
-                continue
-
-            final_url = next(iter(audit.get("pages_checked") or []), None)
-            if final_url:
-                cleaned_final = clean_website_url(final_url)
-                if cleaned_final and (not business.website_url or _domain(cleaned_final) != _domain(business.website_url)):
-                    business.website_url = cleaned_final
-                    business.website_domain = _domain(cleaned_final)
+                    audit = asyncio.run(asyncio.wait_for(crawler.audit_website(business.website_url), timeout=240.0))
+                except Exception as e:
+                    print(f"Crawler timeout/error for {business.website_url}: {e}")
+                    _set_business_status(db, business, "rejected_unreachable")
                     db.commit()
+                    continue
 
-            public_emails = sorted({email.lower().strip() for email in audit.get("emails") or [] if email})
-            _save_public_website_contacts(db, business, audit)
+                _, evidence = _persist_website_research(db, business, audit)
+                audited_count += 1
+                if not audit.get("is_live"):
+                    _set_business_status(db, business, "rejected_unreachable")
+                    db.commit()
+                    continue
 
-            score_result = scorer.calculate_score({
-                "primary_phone": business.primary_phone,
-                "website_url": business.website_url,
-                "website_email": public_emails[0] if public_emails else None,
-                "review_count": business.review_count,
-            }, audit)
-            score = db.query(Score).filter(Score.business_id == business.id).order_by(Score.id.desc()).first()
-            if not score:
-                score = Score(business_id=business.id)
-                db.add(score)
-            score.commercial_score = score_result["commercial_score"]
-            score.data_confidence = score_result["data_confidence"]
-            score.grade = score_result["grade"]
-            score.business_fit = score_result["business_fit"]
-            score.digital_gap = score_result["digital_gap"]
-            score.offer_fit = score_result["offer_fit"]
-            score.buying_intent = score_result["buying_intent"]
-            score.contactability = score_result["contactability"]
-            score.score_version = "v2-research-gated"
-            db.commit()
+                final_url = next(iter(audit.get("pages_checked") or []), None)
+                if final_url:
+                    cleaned_final = clean_website_url(final_url)
+                    if cleaned_final and (not business.website_url or _domain(cleaned_final) != _domain(business.website_url)):
+                        business.website_url = cleaned_final
+                        business.website_domain = _domain(cleaned_final)
+                        db.commit()
 
-            if score.commercial_score < quality_threshold:
-                _set_business_status(db, business, "below_quality_threshold")
+                public_emails = sorted({email.lower().strip() for email in audit.get("emails") or [] if email})
+                _save_public_website_contacts(db, business, audit)
+
+                score_result = scorer.calculate_score({
+                    "primary_phone": business.primary_phone,
+                    "website_url": business.website_url,
+                    "website_email": public_emails[0] if public_emails else None,
+                    "review_count": business.review_count,
+                }, audit)
+                score = db.query(Score).filter(Score.business_id == business.id).order_by(Score.id.desc()).first()
+                if not score:
+                    score = Score(business_id=business.id)
+                    db.add(score)
+                score.commercial_score = score_result["commercial_score"]
+                score.data_confidence = score_result["data_confidence"]
+                score.grade = score_result["grade"]
+                score.business_fit = score_result["business_fit"]
+                score.digital_gap = score_result["digital_gap"]
+                score.offer_fit = score_result["offer_fit"]
+                score.buying_intent = score_result["buying_intent"]
+                score.contactability = score_result["contactability"]
+                score.score_version = "v2-research-gated"
                 db.commit()
+
+                if score.commercial_score < quality_threshold:
+                    _set_business_status(db, business, "below_quality_threshold")
+                    db.commit()
+                    continue
+
+                # 1. Save public people found on the website
+                public_people = audit.get("public_people") or []
+                for person in public_people:
+                    _save_contact(db, business.id, person)
+
+                db.refresh(campaign)
+                options = campaign.settings or {}
+                provider_contacts: List[Dict[str, Any]] = []
+                provider_contacts.extend(asyncio.run(lookup_optional_contacts(
+                    business, options.get("personal_email_enabled", False), options.get("phone_enabled", False)
+                )))
+                for contact in provider_contacts:
+                    enriched_count += int(_save_contact(db, business.id, contact))
+                db.commit()
+
+
+                diagnosis = asyncio.run(ai_sdr.analyze(evidence, industry_config))
+                if not diagnosis:
+                    print(f"ai_sdr.analyze returned None for {business.name}; applying fallback SDR diagnosis.")
+                    diagnosis = _fallback_sdr_diagnosis(business, audit, evidence, industry_config)
+
+                # Always save AI output, even if confidence is low.
+                # We will just mark low confidence as "needs_research" after saving.
+                is_low_confidence = diagnosis.get("confidence") not in {"high", "medium"}
+
+                # Clean up old records before creating new ones on a re-run
+                db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
+                db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
+            
+                opportunity = Opportunity(
+
+                    business_id=business.id,
+                    primary_problem=diagnosis["primary_problem"],
+                    problems=diagnosis["problems"],
+                    recommended_offer=diagnosis["recommended_offer"],
+                    ticket_low=diagnosis["ticket_low"],
+                    ticket_high=diagnosis["ticket_high"],
+                    outreach_angle=diagnosis["outreach_angle"],
+                    ai_reasoning=diagnosis["ai_reasoning"],
+                    confidence=diagnosis["confidence"],
+                )
+                db.add(opportunity)
+                db.flush()
+                db.add(AIAnalysis(
+                    business_id=business.id,
+                    opportunity_id=opportunity.id,
+                    model_name=ai_sdr.model_name,
+                    prompt_template="research_gated_website_evidence",
+                    parsed_output=diagnosis,
+                ))
+                # Determine final status incorporating confidence and contact gate
+                has_contact = _has_actionable_contact(db, business) or bool(business.primary_phone)
+            
+                if is_low_confidence:
+                    final_status = "needs_research"
+                    stage = "needs_review"
+                    activity_body = "AI Analysis saved, but low confidence. Needs human review."
+                elif not has_contact:
+                    final_status = "needs_contact_enrichment"
+                    stage = "needs_review"
+                    activity_body = "AI Analysis saved, but no actionable contact (email/phone) was found."
+                else:
+                    final_status = "qualified"
+                    stage = "qualified"
+                    activity_body = "Qualified from live discovery, website research, AI analysis, and contact enrichment."
+
+                _set_business_status(db, business, final_status)
+            
+                db.add(CRMActivity(
+
+                    business_id=business.id,
+                    activity_type=stage,
+                    body=activity_body,
+                    created_by="Lead Intelligence",
+                ))
+                db.commit()
+                if final_status == "qualified":
+                    qualified_count += 1
+
+            resumable_businesses = []
+            if hasattr(provider, 'discovery_state'):
+                from copy import deepcopy
+                campaign.settings = {**(campaign.settings or {}), 'discovery_state': deepcopy(provider.discovery_state)}
+            job.metrics = {
+                'discovery_rounds': rounds, 'raw_candidates': raw_count,
+                'qualified': qualified_count, 'target': target_quantity,
+                'channel_errors': getattr(provider, 'channel_errors', {}),
+            }
+            db.commit()
+            if qualified_count >= target_quantity:
+                break
+            if rounds >= max_rounds or raw_count >= candidate_budget:
+                stop_reason = 'search_budget_reached'
+                break
+            # Pending candidates are tried once, then new discovery must run.
+            if not discovery_needed:
                 continue
-
-            # 1. Save public people found on the website
-            public_people = audit.get("public_people") or []
-            for person in public_people:
-                _save_contact(db, business.id, person)
-
-            db.refresh(campaign)
-            options = campaign.settings or {}
-            provider_contacts: List[Dict[str, Any]] = []
-            provider_contacts.extend(asyncio.run(lookup_optional_contacts(
-                business, options.get("personal_email_enabled", False), options.get("phone_enabled", False)
-            )))
-            for contact in provider_contacts:
-                enriched_count += int(_save_contact(db, business.id, contact))
-            db.commit()
-
-
-            diagnosis = asyncio.run(ai_sdr.analyze(evidence, industry_config))
-            if not diagnosis:
-                print(f"ai_sdr.analyze returned None for {business.name}; applying fallback SDR diagnosis.")
-                diagnosis = _fallback_sdr_diagnosis(business, audit, evidence, industry_config)
-
-            # Always save AI output, even if confidence is low. 
-            # We will just mark low confidence as "needs_research" after saving.
-            is_low_confidence = diagnosis.get("confidence") not in {"high", "medium"}
-
-            # Clean up old records before creating new ones on a re-run
-            db.query(AIAnalysis).filter(AIAnalysis.business_id == business.id).delete()
-            db.query(Opportunity).filter(Opportunity.business_id == business.id).delete()
-            
-            opportunity = Opportunity(
-
-                business_id=business.id,
-                primary_problem=diagnosis["primary_problem"],
-                problems=diagnosis["problems"],
-                recommended_offer=diagnosis["recommended_offer"],
-                ticket_low=diagnosis["ticket_low"],
-                ticket_high=diagnosis["ticket_high"],
-                outreach_angle=diagnosis["outreach_angle"],
-                ai_reasoning=diagnosis["ai_reasoning"],
-                confidence=diagnosis["confidence"],
-            )
-            db.add(opportunity)
-            db.flush()
-            db.add(AIAnalysis(
-                business_id=business.id,
-                opportunity_id=opportunity.id,
-                model_name=ai_sdr.model_name,
-                prompt_template="research_gated_website_evidence",
-                parsed_output=diagnosis,
-            ))
-            # Determine final status incorporating confidence and contact gate
-            has_contact = _has_actionable_contact(db, business) or bool(business.primary_phone)
-            
-            if is_low_confidence:
-                final_status = "needs_research"
-                stage = "needs_review"
-                activity_body = "AI Analysis saved, but low confidence. Needs human review."
-            elif not has_contact:
-                final_status = "needs_contact_enrichment"
-                stage = "needs_review"
-                activity_body = "AI Analysis saved, but no actionable contact (email/phone) was found."
-            else:
-                final_status = "qualified"
-                stage = "qualified"
-                activity_body = "Qualified from live discovery, website research, AI analysis, and contact enrichment."
-
-            _set_business_status(db, business, final_status)
-            
-            db.add(CRMActivity(
-
-                business_id=business.id,
-                activity_type=stage,
-                body=activity_body,
-                created_by="Lead Intelligence",
-            ))
-            db.commit()
-            if final_status == "qualified":
-                qualified_count += 1
+            has_more = getattr(provider, 'has_more_results', fresh_count > 0)
+            if not has_more:
+                stop_reason = 'provider_error' if getattr(provider, 'channel_errors', {}) else 'search_exhausted'
+                break
 
         # Keep unused reserve candidates and their evidence for a later resume.
 
@@ -958,7 +999,10 @@ def process_campaign_task(campaign_id: int):
             "discovery_channels": options.get('discovery_channels', ['google_maps']),
             "website_filter": website_filter,
             "discovered": total_delivered,
-            "deduplicated": len(unique_businesses),
+            "deduplicated": deduplicated_count,
+            "discovery_rounds": rounds,
+            "raw_candidates": raw_count,
+            "stop_reason": stop_reason,
             "saved": total_delivered,
             "audited": audited_count,
             "enriched_contacts": enriched_count,
