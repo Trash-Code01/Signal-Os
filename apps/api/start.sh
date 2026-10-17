@@ -2,6 +2,7 @@
 set -euo pipefail
 
 echo "=== Devacia Lead OS Backend Starting ==="
+echo "Release: ${RENDER_GIT_COMMIT:-local} (starting API and campaign worker together)"
 PORT="${PORT:-8000}"
 
 # Uvicorn's startup hooks initialize/upgrade the schema before accepting traffic.
