@@ -139,6 +139,14 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
 
     async def discover(self, query, location, industry, limit=None):
         if not self.api_key:
+            try:
+                from .dataforseo_provider import DataForSEOProvider
+                df = DataForSEOProvider()
+                if df.username and df.password:
+                    print("SERPER_API_KEY missing in multichannel. Falling back to DataForSEO provider.")
+                    return await df.discover(query, location, industry, limit)
+            except Exception as df_err:
+                print(f"DataForSEO fallback error: {df_err}")
             raise RuntimeError('Live discovery requires SERPER_API_KEY. No sample leads were created.')
         # A fresh semaphore belongs to each event loop (worker uses asyncio.run).
         self.lookup_semaphore = asyncio.Semaphore(5)
@@ -166,5 +174,15 @@ class MultiChannelDiscoveryProvider(SerperDiscoveryProvider):
                 candidates.extend(batch)
         if not successes:
             reasons = '; '.join(dict.fromkeys(str(batch) for batch in batches if isinstance(batch, Exception)))
+            try:
+                from .dataforseo_provider import DataForSEOProvider
+                df = DataForSEOProvider()
+                if df.username and df.password:
+                    print(f"[MultiChannelDiscovery] All channels failed ({reasons}). Falling back to DataForSEO provider.")
+                    fallback_candidates = await df.discover(query, location, industry, limit)
+                    if fallback_candidates:
+                        return sorted(DeduplicationEngine().deduplicate(fallback_candidates), key=candidate_priority, reverse=True)
+            except Exception as df_err:
+                print(f"DataForSEO fallback error in multichannel: {df_err}")
             raise RuntimeError(f'All selected discovery channels failed. {reasons}')
         return sorted(DeduplicationEngine().deduplicate(candidates), key=candidate_priority, reverse=True)

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, text
+from sqlalchemy.exc import SQLAlchemyError
 from worker import enrich_lead_contacts_task, process_campaign_task
 from core.database import get_db, engine
 from core.models import *
@@ -123,6 +124,13 @@ def startup_db_migrations():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, SQLAlchemyError):
+        # Keep database outages actionable without leaking connection strings,
+        # credentials, or provider diagnostics to the browser.
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database is temporarily unavailable. Please retry shortly."},
+        )
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
@@ -147,8 +155,9 @@ def debug_discovery():
 def health_check():
     """Health endpoint — responds instantly even when DB is down.
 
-    Returns db='connected' when a live SELECT 1 succeeds, 'unreachable' otherwise.
-    The API serves auth and all other routes regardless of db transient state.
+    Returns 503 when the database is unavailable. Render uses this route as its
+    health check, so a live API process with broken persistence is not reported
+    as healthy.
     """
     db_ok = False
     db_err = None
@@ -158,11 +167,11 @@ def health_check():
         db_ok = True
     except Exception as exc:
         db_err = str(exc)
-    res = {"status": "ok", "db": "connected" if db_ok else "unreachable",
+    res = {"status": "ok" if db_ok else "degraded", "db": "connected" if db_ok else "unreachable",
            "revision": os.getenv("RENDER_GIT_COMMIT") or None}
     if db_err:
         res["db_error"] = db_err[:250]
-    return res
+    return res if db_ok else JSONResponse(status_code=503, content=res)
 
 
 @app.get("/api/environment")

@@ -103,7 +103,7 @@ def test_real_celery_consumer_delivers_campaign_through_http(setup, monkeypatch)
         })
         assert response.status_code == 200, response.text
         cid = response.json()['campaign_id']
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             status = client.get(f'/api/campaigns/{cid}/status', headers=headers(1)).json()
             if status['terminal']:

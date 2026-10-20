@@ -2,8 +2,10 @@ import os
 import aiohttp
 import asyncio
 import base64
+import urllib.parse
 from typing import List, Dict, Any, Optional
 from core.providers import BusinessDiscoveryProvider
+from core.lead_quality import canonical_country, clean_phone_for_country, clean_website_url
 
 class DataForSEOProvider(BusinessDiscoveryProvider):
     def __init__(self):
@@ -92,16 +94,20 @@ class DataForSEOProvider(BusinessDiscoveryProvider):
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
                 location_code = await self._resolve_location_code(session, location)
-                if not location_code:
-                    print(f"DataForSEO: No exact supported location for {location!r}; discovery skipped.")
-                    return []
+                if location_code:
+                    payload = [{
+                        "keyword": query or industry,
+                        "language_code": "en",
+                        "location_code": location_code,
+                        "depth": depth,
+                    }]
+                else:
+                    payload = [{
+                        "keyword": f"{query or industry} in {location}",
+                        "language_code": "en",
+                        "depth": depth,
+                    }]
 
-                payload = [{
-                    "keyword": query or industry,
-                    "language_code": "en",
-                    "location_code": location_code,
-                    "depth": depth,
-                }]
                 # Use Live API for immediate response (blocks until done)
                 async with session.post(url, json=payload) as response:
                     data = await response.json()
@@ -114,7 +120,7 @@ class DataForSEOProvider(BusinessDiscoveryProvider):
                         status_code = tasks[0].get("status_code")
                         if status_code == 20000:
                             result = tasks[0].get("result", [{}])[0]
-                            items = result.get("items", [])
+                            items = result.get("items", []) or []
                             source_url = result.get("check_url")
                         else:
                             print(f"DataForSEO task error {status_code}: {tasks[0].get('status_message')}")
@@ -124,24 +130,37 @@ class DataForSEOProvider(BusinessDiscoveryProvider):
                         return []
                         
                 for item in items[:depth]:
+                    name = (item.get("title") or "").strip()
+                    if not name:
+                        continue
                     address_info = item.get("address_info") or {}
                     rating = item.get("rating") or {}
+                    website = clean_website_url(item.get("url") or (f"https://{item.get('domain')}" if item.get('domain') else None))
+                    item_country = canonical_country(item.get("country_code") or address_info.get("country_code") or (location.split(",")[-1].strip() if "," in location else location))
+                    phone = clean_phone_for_country(item.get("phone"), item_country)
+                    
                     raw_businesses.append({
-                        "name": item.get("title"),
-                        "website_url": item.get("url") or (f"https://{item.get('domain')}" if item.get("domain") else None),
-                        "primary_phone": item.get("phone"),
+                        "name": name,
+                        "website_url": website,
+                        "website_status": "has_website" if website else "unknown",
+                        "primary_phone": phone,
                         "address": item.get("address") or address_info.get("address"),
-                        "city": item.get("city") or address_info.get("city"),
+                        "city": item.get("city") or address_info.get("city") or (location.split(",")[0].strip() if "," in location else None),
                         "state_province": item.get("state") or address_info.get("state"),
-                        "country": item.get("country_code") or address_info.get("country_code"),
+                        "country": item_country,
                         "postal_code": item.get("zip") or address_info.get("zip"),
                         "latitude": item.get("latitude"),
                         "longitude": item.get("longitude"),
-                        "google_place_id": item.get("place_id") or item.get("cid"),
+                        "google_place_id": str(item.get("place_id") or item.get("cid") or ""),
                         "rating": rating.get("value") if isinstance(rating, dict) else None,
                         "review_count": rating.get("votes_count") if isinstance(rating, dict) else None,
-                        "source_url": source_url,
-                        "source_metadata": {"source": "dataforseo_maps", "rank_group": item.get("rank_group")}
+                        "source_url": source_url or f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name)}",
+                        "source_metadata": {
+                            "source": "dataforseo_maps",
+                            "channel": "google_maps",
+                            "rank_group": item.get("rank_group"),
+                            "website_source": "google_business_profile" if website else None,
+                        }
                     })
                                         
         except Exception as e:

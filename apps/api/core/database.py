@@ -1,7 +1,8 @@
 import os
 import re
+import socket
 from . import runtime
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -27,6 +28,28 @@ engine = create_engine(
     pool_timeout=15,
     pool_recycle=1800,
 )
+
+def _resolve_ipv4(host: str) -> str | None:
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET)
+        if infos:
+            return infos[0][4][0]
+    except Exception as exc:
+        print(f"[database] IPv4 resolution failed for {host}: {exc}")
+    return None
+
+if not DATABASE_URL.startswith("sqlite:"):
+    @event.listens_for(engine, "do_connect")
+    def force_ipv4_hostaddr(dialect, conn_rec, cargs, cparams):
+        # Render containers lack IPv6 outbound connectivity. Neon resolves to both
+        # AAAA (IPv6) and A (IPv4). Passing hostaddr forces psycopg to connect over IPv4
+        # while keeping the hostname for SSL SNI and cert verification.
+        host = cparams.get("host")
+        if host and host not in ("localhost", "127.0.0.1") and not host.startswith("/"):
+            ipv4 = _resolve_ipv4(host)
+            if ipv4:
+                cparams["hostaddr"] = ipv4
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

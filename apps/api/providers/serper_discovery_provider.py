@@ -73,6 +73,8 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
     async def _fetch_website(self, session: aiohttp.ClientSession, business: dict):
         """Fallback to Serper organic search to find the website if Google Maps did not provide one."""
         business['website_status'] = 'unknown'
+        if not self.api_key:
+            return None
         query = f"{business.get('name', '')} {business.get('address') or business.get('city', '')} official website"
         payload = {"q": query, "num": 5}
         try:
@@ -93,6 +95,14 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         print(f"Serper discovering: {query} in {location} for {industry}")
 
         if not self.api_key:
+            try:
+                from .dataforseo_provider import DataForSEOProvider
+                df = DataForSEOProvider()
+                if df.username and df.password:
+                    print("SERPER_API_KEY missing. Falling back to DataForSEO provider.")
+                    return await df.discover(query, location, industry, limit)
+            except Exception as df_err:
+                print(f"DataForSEO fallback error: {df_err}")
             report_provider_state("serper", "not_configured", "SERPER_API_KEY is missing.")
             raise RuntimeError("Live discovery requires SERPER_API_KEY. No sample leads were created.")
 
@@ -143,6 +153,14 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
                                 state, message = provider_failure(response.status, data)
                                 report_provider_state("serper", state, message, response.status)
                                 if not places:
+                                    try:
+                                        from .dataforseo_provider import DataForSEOProvider
+                                        df = DataForSEOProvider()
+                                        if df.username and df.password:
+                                            print(f"[Discovery] Serper returned {response.status} ({message}). Falling back to DataForSEO provider.")
+                                            return await df.discover(query, location, industry, limit)
+                                    except Exception as df_err:
+                                        print(f"DataForSEO fallback error: {df_err}")
                                     raise RuntimeError(message)
                                 break
 
@@ -239,6 +257,14 @@ class SerperDiscoveryProvider(BusinessDiscoveryProvider):
         except Exception as e:
             print(f"Serper discovery error: {e}")
             if not raw_businesses:
+                try:
+                    from .dataforseo_provider import DataForSEOProvider
+                    df = DataForSEOProvider()
+                    if df.username and df.password:
+                        print(f"[Discovery] Serper failed ({e}). Falling back to DataForSEO provider.")
+                        return await df.discover(query, location, industry, limit)
+                except Exception as df_err:
+                    print(f"DataForSEO fallback error: {df_err}")
                 raise RuntimeError(f"Google Maps discovery unavailable: {e}") from e
 
         return raw_businesses

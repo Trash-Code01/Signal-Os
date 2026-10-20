@@ -1,16 +1,6 @@
 # Campaign pipeline follow-up QA — 2026-10-13
 
-Update: with the replacement Serper key supplied on October 13, the local live no-website campaign completed in 11 seconds, discovered four candidates and delivered its target of one qualified CRM lead. Earlier insufficient-credit results below describe the old account. All six discovery channels currently depend on Serper.
-
-## No-website and login verification
-
-- Campaign 1, `India Pune Tailor`, run 6: four candidates saved, 12 duplicates removed, one qualified lead (`X Tailor's`, score 95/A+), zero website audits and zero paid contact enrichment records. The qualified lead has a public listing phone and no official website found. Three remaining candidates were not fully researched because the target was one.
-- The monitor now returns and displays three applicable stages: discovery/website presence, public business contacts, and no-website opportunity scoring. Website crawling is skipped. Contact-setting copy no longer promises website contacts for every campaign.
-- Backend suite: 107 passed; the subsequently added explicit no-crawler worker regression separately passed (one test). Frontend tests: 11 passed. Production frontend build passed compilation, types and all 19 pages. Existing configuration skips lint.
-- Netlify login was pointing to `devacia-api.onrender.com`, while the working backend is `devacia-backend.onrender.com`. Corrected the build configuration and included the server API URL.
-- React error 418 was reproduced locally by inserting a hosting comment/newline into the production HTML head. Moving the Material Symbols font setup out of the manually managed layout head removes the mismatch. The fixed production build produced no new console errors or warnings with the same injection.
-- Signed-in local browser verified completed 3/3 stages, target 1/1 and the CRM lead. New provider credentials remain in ignored local environment files; this does not itself update Render configuration.
-- Production deployment and an authenticated production campaign still require verification. Netlify was observed publishing `master` at `25916a2`, while the prior QA fixes were on `main`.
+The local Redis/Celery pipeline completed research for an existing public business and delivered one qualified CRM record. New discovery remains blocked by Serper account credits: the latest live Places and Search probes both returned HTTP 400, `Not enough credits`, with zero results. All six discovery channels currently depend on Serper.
 
 ## Fixes
 
@@ -39,7 +29,7 @@ The automated consumer regression uses a real Celery worker with memory transpor
 
 ## Remaining checks
 
-1. Deploy the tested code and configure the replacement Serper key on Render; the local new-discovery retry has passed.
+1. Replenish the configured Serper account, then retry the no-website campaign and verify new real leads, source evidence, selection and export.
 2. Replenish Snov before validating paid personal-email enrichment.
 3. Confirm the deployed Render revision and run an authenticated production campaign. Local success and public health alone do not verify production worker delivery.
 
